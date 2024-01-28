@@ -8,7 +8,7 @@ jobs:
     outputs:
       tagpr-tag: ${{ steps.run-tagpr.outputs.tag }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - id: run-tagpr
         uses: Songmu/tagpr@v1
         env:
@@ -19,7 +19,7 @@ jobs:
     if: needs.tagpr.outputs.tagpr-tag != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - run: git fetch --force --tags
       - name: Set up Go
         uses: actions/setup-go@v2
