@@ -5,14 +5,20 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/elasticache"
+	"github.com/aws/aws-sdk-go-v2/service/pricing"
+	"github.com/aws/aws-sdk-go-v2/service/pricing/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
-	"os"
 )
 
 const RDS = "rds"
@@ -31,9 +37,16 @@ to quickly create a Cobra application.`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	RunE: func(cmd *cobra.Command, args []string) error {
-		HEADINGS := []string{"Duration (Year)", "Offering Type", "One Time Payment (USD)", "Usage Charges (USD, Monthly)"}
+		HEADINGS := []string{
+			"Duration (Year)",
+			"Offering Type",
+			"One Time Payment (USD)",
+			"Usage Charges (USD, Monthly)",
+			"Total Cost (USD)",
+			"Savings vs On-Demand",
+		}
 
-		cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-west-2"))
+		cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("ap-northeast-1"))
 		if err != nil {
 			return fmt.Errorf("unable to load SDK config, %v", err)
 		}
@@ -68,13 +81,168 @@ to quickly create a Cobra application.`,
 	},
 }
 
+func getRdsOnDemandPrice(cfg aws.Config, dbInstanceClass string, productDescription string, multiAz bool) (float64, error) {
+	// Pricing APIはus-east-1でのみ利用可能
+	pricingCfg := cfg.Copy()
+	pricingCfg.Region = "us-east-1"
+	svc := pricing.NewFromConfig(pricingCfg)
+
+	// RDSのオンデマンド料金を取得
+	filters := []types.Filter{
+		{
+			Field: aws.String("instanceType"),
+			Value: aws.String(dbInstanceClass),
+			Type:  types.FilterTypeTermMatch,
+		},
+		{
+			Field: aws.String("databaseEngine"),
+			Value: aws.String(strings.ToLower(productDescription)),
+			Type:  types.FilterTypeTermMatch,
+		},
+		{
+			Field: aws.String("deploymentOption"),
+			Value: aws.String(getDeploymentOption(multiAz)),
+			Type:  types.FilterTypeTermMatch,
+		},
+		{
+			Field: aws.String("regionCode"),
+			Value: aws.String("ap-northeast-1"),
+			Type:  types.FilterTypeTermMatch,
+		},
+	}
+	fmt.Printf("filters: %v\n", filters)
+
+	input := &pricing.GetProductsInput{
+		ServiceCode: aws.String("AmazonRDS"),
+		Filters:     filters,
+	}
+
+	result, err := svc.GetProducts(context.TODO(), input)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(result.PriceList) > 0 {
+		// Parse JSON response to get the price
+		// This is a simplified version - you might need to handle the JSON parsing more carefully
+		var priceData map[string]interface{}
+		err = json.Unmarshal([]byte(result.PriceList[0]), &priceData)
+		if err != nil {
+			return 0, err
+		}
+
+		// Navigate through the price data structure
+		terms := priceData["terms"].(map[string]interface{})
+		onDemand := terms["OnDemand"].(map[string]interface{})
+		for _, v := range onDemand {
+			priceDimensions := v.(map[string]interface{})["priceDimensions"].(map[string]interface{})
+			for _, pd := range priceDimensions {
+				pricePerUnit := pd.(map[string]interface{})["pricePerUnit"].(map[string]interface{})
+				price, _ := strconv.ParseFloat(pricePerUnit["USD"].(string), 64)
+				return price * 24 * 30, nil // Convert to monthly price
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("no pricing information found")
+}
+
+func getElastiCacheOnDemandPrice(cfg aws.Config, cacheNodeType string, productDescription string) (float64, error) {
+	// Pricing APIはus-east-1でのみ利用可能
+	pricingCfg := cfg.Copy()
+	pricingCfg.Region = "us-east-1"
+	svc := pricing.NewFromConfig(pricingCfg)
+
+	// ElastiCacheのオンデマンド料金を取得
+	filters := []types.Filter{
+		{
+			Field: aws.String("instanceType"),
+			Value: aws.String(cacheNodeType),
+			Type:  types.FilterTypeTermMatch,
+		},
+		{
+			Field: aws.String("cacheEngine"),
+			Value: aws.String(strings.ToLower(productDescription)),
+			Type:  types.FilterTypeTermMatch,
+		},
+		{
+			Field: aws.String("regionCode"),
+			Value: aws.String("us-west-2"),
+			Type:  types.FilterTypeTermMatch,
+		},
+	}
+
+	input := &pricing.GetProductsInput{
+		ServiceCode: aws.String("AmazonElastiCache"),
+		Filters:     filters,
+	}
+
+	result, err := svc.GetProducts(context.TODO(), input)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(result.PriceList) > 0 {
+		var priceData map[string]interface{}
+		err = json.Unmarshal([]byte(result.PriceList[0]), &priceData)
+		if err != nil {
+			return 0, err
+		}
+
+		terms := priceData["terms"].(map[string]interface{})
+		onDemand := terms["OnDemand"].(map[string]interface{})
+		for _, v := range onDemand {
+			priceDimensions := v.(map[string]interface{})["priceDimensions"].(map[string]interface{})
+			for _, pd := range priceDimensions {
+				pricePerUnit := pd.(map[string]interface{})["pricePerUnit"].(map[string]interface{})
+				price, _ := strconv.ParseFloat(pricePerUnit["USD"].(string), 64)
+				return price * 24 * 30, nil // Convert to monthly price
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("no pricing information found")
+}
+
+func getDeploymentOption(multiAz bool) string {
+	if multiAz {
+		return "Multi-AZ"
+	}
+	return "Single-AZ"
+}
+
 func getRdsOffering(cfg aws.Config, table *tablewriter.Table) error {
-	OfferingTypes := []string{"No Upfront", "Partial Upfront", "All Upfront"}
+	OfferingTypes := []string{"On-Demand", "No Upfront", "Partial Upfront", "All Upfront"}
 	Durations := []string{"1", "3"}
 	svc := rds.NewFromConfig(cfg)
 
+	// オンデマンド料金をAPI経由で取得
+	onDemandPrice, err := getRdsOnDemandPrice(cfg, dbInstanceClass, productDescription, multiAz)
+	if err != nil {
+		return fmt.Errorf("failed to get on-demand price: %v", err)
+	}
+
+	fmt.Printf("onDemandPrice: %v\n", onDemandPrice)
+
+	// 各期間ごとのオンデマンドの総コストを保存
+	totalCosts := make(map[string]float64)
+
 	for _, duration := range Durations {
 		for _, offeringType := range OfferingTypes {
+			if offeringType == "On-Demand" {
+				yearlyOnDemand := onDemandPrice * float64(12*stringToInt(duration))
+				table.Append([]string{
+					duration,
+					offeringType,
+					"0",
+					fmt.Sprintf("%.0f", onDemandPrice),
+					fmt.Sprintf("%.0f", yearlyOnDemand),
+					"",
+				})
+				totalCosts[duration] = yearlyOnDemand
+				continue
+			}
+
 			params := &rds.DescribeReservedDBInstancesOfferingsInput{
 				Duration:           aws.String(duration),
 				OfferingType:       aws.String(offeringType),
@@ -88,14 +256,26 @@ func getRdsOffering(cfg aws.Config, table *tablewriter.Table) error {
 			}
 			if len(o.ReservedDBInstancesOfferings) > 0 {
 				offering := o.ReservedDBInstancesOfferings[0]
+				monthlyRecurring := *offering.RecurringCharges[0].RecurringChargeAmount * 24 * 30
+				totalCost := *offering.FixedPrice + (monthlyRecurring * float64(12*stringToInt(duration)))
+
+				savings := ""
+				if totalCosts[duration] > 0 {
+					savingsAmount := totalCosts[duration] - totalCost
+					savingsPercent := (savingsAmount / totalCosts[duration]) * 100
+					savings = fmt.Sprintf("%.1f%% ($%.0f)", savingsPercent, savingsAmount)
+				}
+
 				table.Append([]string{
 					duration,
 					offeringType,
 					fmt.Sprintf("%.0f", *offering.FixedPrice),
-					fmt.Sprintf("%.0f", *offering.RecurringCharges[0].RecurringChargeAmount*24*30),
+					fmt.Sprintf("%.0f", monthlyRecurring),
+					fmt.Sprintf("%.0f", totalCost),
+					savings,
 				})
 			} else {
-				table.Append([]string{duration, offeringType, "N/A", "N/A"})
+				table.Append([]string{duration, offeringType, "N/A", "N/A", "N/A", "N/A"})
 			}
 		}
 	}
@@ -103,12 +283,35 @@ func getRdsOffering(cfg aws.Config, table *tablewriter.Table) error {
 }
 
 func getElastiCacheOffering(cfg aws.Config, table *tablewriter.Table) error {
-	OfferingTypes := []string{"No Upfront", "Partial Upfront", "All Upfront"}
+	OfferingTypes := []string{"On-Demand", "No Upfront", "Partial Upfront", "All Upfront"}
 	Durations := []string{"1", "3"}
 	svc := elasticache.NewFromConfig(cfg)
 
+	// オンデマンド料金をAPI経由で取得
+	onDemandPrice, err := getElastiCacheOnDemandPrice(cfg, cacheNodeType, productDescription)
+	if err != nil {
+		return fmt.Errorf("failed to get on-demand price: %v", err)
+	}
+
+	// 各期間ごとのオンデマンドの総コストを保存
+	totalCosts := make(map[string]float64)
+
 	for _, duration := range Durations {
 		for _, offeringType := range OfferingTypes {
+			if offeringType == "On-Demand" {
+				yearlyOnDemand := onDemandPrice * float64(12*stringToInt(duration))
+				table.Append([]string{
+					duration,
+					offeringType,
+					"0",
+					fmt.Sprintf("%.0f", onDemandPrice),
+					fmt.Sprintf("%.0f", yearlyOnDemand),
+					"",
+				})
+				totalCosts[duration] = yearlyOnDemand
+				continue
+			}
+
 			params := &elasticache.DescribeReservedCacheNodesOfferingsInput{
 				Duration:           aws.String(duration),
 				OfferingType:       aws.String(offeringType),
@@ -121,18 +324,42 @@ func getElastiCacheOffering(cfg aws.Config, table *tablewriter.Table) error {
 			}
 			if len(o.ReservedCacheNodesOfferings) > 0 {
 				offering := o.ReservedCacheNodesOfferings[0]
+				monthlyRecurring := *offering.RecurringCharges[0].RecurringChargeAmount * 24 * 30
+				totalCost := *offering.FixedPrice + (monthlyRecurring * float64(12*stringToInt(duration)))
+
+				savings := ""
+				if totalCosts[duration] > 0 {
+					savingsAmount := totalCosts[duration] - totalCost
+					savingsPercent := (savingsAmount / totalCosts[duration]) * 100
+					savings = fmt.Sprintf("%.1f%% ($%.0f)", savingsPercent, savingsAmount)
+				}
+
 				table.Append([]string{
 					duration,
 					offeringType,
 					fmt.Sprintf("%.0f", *offering.FixedPrice),
-					fmt.Sprintf("%.0f", *offering.RecurringCharges[0].RecurringChargeAmount*24*30),
+					fmt.Sprintf("%.0f", monthlyRecurring),
+					fmt.Sprintf("%.0f", totalCost),
+					savings,
 				})
 			} else {
-				table.Append([]string{duration, offeringType, "N/A", "N/A"})
+				table.Append([]string{duration, offeringType, "N/A", "N/A", "N/A", "N/A"})
 			}
 		}
 	}
 	return nil
+}
+
+// 文字列を整数に変換するヘルパー関数
+func stringToInt(s string) int {
+	switch s {
+	case "1":
+		return 1
+	case "3":
+		return 3
+	default:
+		return 0
+	}
 }
 
 func Execute() {
@@ -156,6 +383,6 @@ func init() {
 	rootCmd.Flags().StringVar(&cacheNodeType, "cache-node-type", "", "")
 
 	rootCmd.MarkFlagRequired("service")
-	rootCmd.MarkFlagRequired("db-instance-class")
+	// rootCmd.MarkFlagRequired("db-instance-class")
 	rootCmd.MarkFlagRequired("product-description")
 }
