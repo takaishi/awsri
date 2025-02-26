@@ -38,12 +38,12 @@ to quickly create a Cobra application.`,
 	// has an action associated with it:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		HEADINGS := []string{
-			"Duration (Year)",
+			"Duration",
 			"Offering Type",
-			"One Time Payment (USD)",
-			"Usage Charges (USD, Monthly)",
-			"Total Cost (USD)",
-			"Savings vs On-Demand",
+			"Upfront (USD)",
+			"Monthly (USD)",
+			"Effective Monthly (USD)",
+			"Savings/Month",
 		}
 
 		cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("ap-northeast-1"))
@@ -222,24 +222,19 @@ func getRdsOffering(cfg aws.Config, table *tablewriter.Table) error {
 		return fmt.Errorf("failed to get on-demand price: %v", err)
 	}
 
-	fmt.Printf("onDemandPrice: %v\n", onDemandPrice)
-
-	// 各期間ごとのオンデマンドの総コストを保存
-	totalCosts := make(map[string]float64)
-
 	for _, duration := range Durations {
+		durationMonths := 12 * stringToInt(duration)
+
 		for _, offeringType := range OfferingTypes {
 			if offeringType == "On-Demand" {
-				yearlyOnDemand := onDemandPrice * float64(12*stringToInt(duration))
 				table.Append([]string{
-					duration,
+					fmt.Sprintf("%dy", stringToInt(duration)),
 					offeringType,
 					"0",
 					fmt.Sprintf("%.0f", onDemandPrice),
-					fmt.Sprintf("%.0f", yearlyOnDemand),
-					"",
+					fmt.Sprintf("%.0f", onDemandPrice),
+					"-",
 				})
-				totalCosts[duration] = yearlyOnDemand
 				continue
 			}
 
@@ -257,26 +252,35 @@ func getRdsOffering(cfg aws.Config, table *tablewriter.Table) error {
 			if len(o.ReservedDBInstancesOfferings) > 0 {
 				offering := o.ReservedDBInstancesOfferings[0]
 				monthlyRecurring := *offering.RecurringCharges[0].RecurringChargeAmount * 24 * 30
-				totalCost := *offering.FixedPrice + (monthlyRecurring * float64(12*stringToInt(duration)))
 
-				savings := ""
-				if totalCosts[duration] > 0 {
-					savingsAmount := totalCosts[duration] - totalCost
-					savingsPercent := (savingsAmount / totalCosts[duration]) * 100
-					savings = fmt.Sprintf("%.1f%% ($%.0f)", savingsPercent, savingsAmount)
-				}
+				// 前払い費用を月額換算
+				monthlyUpfront := *offering.FixedPrice / float64(durationMonths)
+				effectiveMonthly := monthlyUpfront + monthlyRecurring
+
+				// 月額での節約額を計算
+				monthlySavings := onDemandPrice - effectiveMonthly
+				savingsPercent := (monthlySavings / onDemandPrice) * 100
 
 				table.Append([]string{
-					duration,
+					fmt.Sprintf("%dy", stringToInt(duration)),
 					offeringType,
 					fmt.Sprintf("%.0f", *offering.FixedPrice),
 					fmt.Sprintf("%.0f", monthlyRecurring),
-					fmt.Sprintf("%.0f", totalCost),
-					savings,
+					fmt.Sprintf("%.0f", effectiveMonthly),
+					fmt.Sprintf("%.0f (%.1f%%)", monthlySavings, savingsPercent),
 				})
 			} else {
-				table.Append([]string{duration, offeringType, "N/A", "N/A", "N/A", "N/A"})
+				table.Append([]string{
+					fmt.Sprintf("%dy", stringToInt(duration)),
+					offeringType,
+					"N/A", "N/A", "N/A", "N/A",
+				})
 			}
+		}
+
+		// 期間ごとに区切り線を追加
+		if duration != Durations[len(Durations)-1] {
+			table.Append([]string{"", "", "", "", "", ""})
 		}
 	}
 	return nil
