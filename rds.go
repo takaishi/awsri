@@ -79,19 +79,19 @@ func (c *RDSCommand) Run(ctx context.Context) error {
 				monthlyRecurring := *offering.RecurringCharges[0].RecurringChargeAmount * 24 * 30
 				fixedPrice := *offering.FixedPrice
 
-				// Calculate effective monthly cost
-				effectiveMonthly := CalculateEffectiveMonthly(fixedPrice, monthlyRecurring, durationMonths)
+				// Calculate effective yearly cost (function name remains the same for compatibility)
+				effectiveYearly := CalculateEffectiveMonthly(fixedPrice, monthlyRecurring, durationMonths)
 
-				// Calculate savings
-				monthlySavings, savingsPercent := CalculateSavings(onDemandPrice, effectiveMonthly)
+				// Calculate yearly savings
+				yearlySavings, savingsPercent := CalculateSavings(onDemandPrice, effectiveYearly)
 
 				tableRenderer.AppendReservedRow(
 					duration,
 					offeringType,
 					fixedPrice,
 					monthlyRecurring,
-					effectiveMonthly,
-					monthlySavings,
+					effectiveYearly,
+					yearlySavings,
 					savingsPercent,
 				)
 			} else {
@@ -169,7 +169,7 @@ func (c *RDSCommand) getOffering(offerings []rdsTypes.ReservedDBInstancesOfferin
 }
 
 func (c *RDSCommand) getDatabaseEngine(productDescription string) (string, error) {
-	if strings.Contains(productDescription, "postgres") {
+	if strings.Contains(productDescription, "postgresql") {
 		return "PostgreSQL", nil
 	}
 	return "", fmt.Errorf("unsupported database engine: %s", productDescription)
