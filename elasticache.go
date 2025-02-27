@@ -115,7 +115,7 @@ func (c *ElasticacheCommand) getElastiCacheOnDemandPrice(cfg aws.Config, cacheNo
 		},
 		{
 			Field: aws.String("regionCode"),
-			Value: aws.String("us-west-2"),
+			Value: aws.String("ap-northeast-1"),
 			Type:  types.FilterTypeTermMatch,
 		},
 	}

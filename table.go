@@ -16,8 +16,8 @@ var HEADINGS = []string{
 	"Offering Type",
 	"Upfront (USD)",
 	"Monthly (USD)",
-	"Effective Monthly (USD)",
-	"Savings/Month",
+	"Yearly (USD)",
+	"Savings/Year",
 }
 
 // Common offering types and durations
@@ -45,12 +45,13 @@ func NewTableRenderer() *TableRenderer {
 
 // AppendOnDemandRow adds an on-demand row to the table
 func (t *TableRenderer) AppendOnDemandRow(duration int, onDemandPrice float64) {
+	yearlyPrice := onDemandPrice * 12
 	t.table.Append([]string{
 		fmt.Sprintf("%dy", duration),
 		"On-Demand",
 		"0",
-		fmt.Sprintf("%.0f", onDemandPrice),
-		fmt.Sprintf("%.0f", onDemandPrice),
+		fmt.Sprintf("%.1f", onDemandPrice),
+		fmt.Sprintf("%.1f", yearlyPrice),
 		"-",
 	})
 }
@@ -61,17 +62,17 @@ func (t *TableRenderer) AppendReservedRow(
 	offeringType string,
 	fixedPrice float64,
 	monthlyRecurring float64,
-	effectiveMonthly float64,
-	monthlySavings float64,
+	effectiveYearly float64,
+	yearlySavings float64,
 	savingsPercent float64,
 ) {
 	t.table.Append([]string{
 		fmt.Sprintf("%dy", duration),
 		offeringType,
-		fmt.Sprintf("%.0f", fixedPrice),
-		fmt.Sprintf("%.0f", monthlyRecurring),
-		fmt.Sprintf("%.0f", effectiveMonthly),
-		fmt.Sprintf("%.0f (%.1f%%)", monthlySavings, savingsPercent),
+		fmt.Sprintf("%.1f", fixedPrice),
+		fmt.Sprintf("%.1f", monthlyRecurring),
+		fmt.Sprintf("%.1f", effectiveYearly),
+		fmt.Sprintf("%.1f (%.1f%%)", yearlySavings, savingsPercent),
 	})
 }
 
@@ -102,17 +103,20 @@ type PricingData struct {
 	EffectiveMonthly float64
 }
 
-// CalculateEffectiveMonthly calculates the effective monthly cost
+// CalculateEffectiveMonthly calculates the effective yearly cost
+// Despite the name, this now returns yearly cost
 func CalculateEffectiveMonthly(fixedPrice float64, monthlyRecurring float64, durationMonths int) float64 {
 	monthlyUpfront := fixedPrice / float64(durationMonths)
-	return monthlyUpfront + monthlyRecurring
+	monthlyTotal := monthlyUpfront + monthlyRecurring
+	return monthlyTotal * 12 // Convert to yearly cost
 }
 
-// CalculateSavings calculates the savings amount and percentage
-func CalculateSavings(onDemandPrice float64, effectiveMonthly float64) (float64, float64) {
-	monthlySavings := onDemandPrice - effectiveMonthly
-	savingsPercent := (monthlySavings / onDemandPrice) * 100
-	return monthlySavings, savingsPercent
+// CalculateSavings calculates the yearly savings amount and percentage
+func CalculateSavings(onDemandPrice float64, effectiveYearly float64) (float64, float64) {
+	yearlyOnDemand := onDemandPrice * 12 // Convert monthly on-demand to yearly
+	yearlySavings := yearlyOnDemand - effectiveYearly
+	savingsPercent := (yearlySavings / yearlyOnDemand) * 100
+	return yearlySavings, savingsPercent
 }
 
 // DurationToMonths converts years to months
