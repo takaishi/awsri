@@ -2,9 +2,7 @@ package awsri
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -13,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/pricing"
 	"github.com/aws/aws-sdk-go-v2/service/pricing/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
-	"github.com/olekukonko/tablewriter"
+	rdsTypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 )
 
 type RDSOption struct {
@@ -35,44 +33,26 @@ func (c *RDSCommand) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("unable to load SDK config, %v", err)
 	}
-	HEADINGS := []string{
-		"Duration",
-		"Offering Type",
-		"Upfront (USD)",
-		"Monthly (USD)",
-		"Effective Monthly (USD)",
-		"Savings/Month",
-	}
-	table := tablewriter.NewWriter(os.Stdout)
-	table.SetHeader(HEADINGS)
-	table.SetAutoFormatHeaders(false)
-	table.SetAutoWrapText(false)
-	table.SetBorders(tablewriter.Border{Left: true, Top: false, Right: true, Bottom: false})
-	table.SetCenterSeparator("|")
 
-	OfferingTypes := []string{"On-Demand", "No Upfront", "Partial Upfront", "All Upfront"}
-	Durations := []int{1, 3}
+	tableRenderer := NewTableRenderer()
 	svc := rds.NewFromConfig(cfg)
 
 	// オンデマンド料金をAPI経由で取得
-	onDemandPrice, err := c.getRdsOnDemandPrice(cfg, c.opts.DbInstanceClass, c.opts.ProductDescription, c.opts.MultiAz)
+	databaseEngine, err := c.getDatabaseEngine(c.opts.ProductDescription)
+	if err != nil {
+		return fmt.Errorf("failed to get database engine: %v", err)
+	}
+	onDemandPrice, err := c.getRdsOnDemandPrice(cfg, c.opts.DbInstanceClass, databaseEngine, c.opts.MultiAz)
 	if err != nil {
 		return fmt.Errorf("failed to get on-demand price: %v", err)
 	}
 
 	for _, duration := range Durations {
-		durationMonths := 12 * duration
+		durationMonths := DurationToMonths(duration)
 
 		for _, offeringType := range OfferingTypes {
 			if offeringType == "On-Demand" {
-				table.Append([]string{
-					fmt.Sprintf("%dy", duration),
-					offeringType,
-					"0",
-					fmt.Sprintf("%.0f", onDemandPrice),
-					fmt.Sprintf("%.0f", onDemandPrice),
-					"-",
-				})
+				tableRenderer.AppendOnDemandRow(duration, onDemandPrice)
 				continue
 			}
 
@@ -84,45 +64,48 @@ func (c *RDSCommand) Run(ctx context.Context) error {
 				MultiAZ:            aws.Bool(c.opts.MultiAz),
 			}
 			o, err := svc.DescribeReservedDBInstancesOfferings(context.TODO(), params)
+
 			if err != nil {
 				return err
 			}
+
 			if len(o.ReservedDBInstancesOfferings) > 0 {
-				offering := o.ReservedDBInstancesOfferings[0]
+				offering := c.getOffering(o.ReservedDBInstancesOfferings, c.opts.ProductDescription, c.opts.MultiAz)
+				if offering == nil {
+					tableRenderer.AppendNotAvailableRow(duration, offeringType)
+					continue
+				}
+
 				monthlyRecurring := *offering.RecurringCharges[0].RecurringChargeAmount * 24 * 30
+				fixedPrice := *offering.FixedPrice
 
-				// 前払い費用を月額換算
-				monthlyUpfront := *offering.FixedPrice / float64(durationMonths)
-				effectiveMonthly := monthlyUpfront + monthlyRecurring
+				// Calculate effective monthly cost
+				effectiveMonthly := CalculateEffectiveMonthly(fixedPrice, monthlyRecurring, durationMonths)
 
-				// 月額での節約額を計算
-				monthlySavings := onDemandPrice - effectiveMonthly
-				savingsPercent := (monthlySavings / onDemandPrice) * 100
+				// Calculate savings
+				monthlySavings, savingsPercent := CalculateSavings(onDemandPrice, effectiveMonthly)
 
-				table.Append([]string{
-					fmt.Sprintf("%dy", duration),
+				tableRenderer.AppendReservedRow(
+					duration,
 					offeringType,
-					fmt.Sprintf("%.0f", *offering.FixedPrice),
-					fmt.Sprintf("%.0f", monthlyRecurring),
-					fmt.Sprintf("%.0f", effectiveMonthly),
-					fmt.Sprintf("%.0f (%.1f%%)", monthlySavings, savingsPercent),
-				})
+					fixedPrice,
+					monthlyRecurring,
+					effectiveMonthly,
+					monthlySavings,
+					savingsPercent,
+				)
 			} else {
-				table.Append([]string{
-					fmt.Sprintf("%dy", duration),
-					offeringType,
-					"N/A", "N/A", "N/A", "N/A",
-				})
+				tableRenderer.AppendNotAvailableRow(duration, offeringType)
 			}
 		}
 
 		// 期間ごとに区切り線を追加
 		if duration != Durations[len(Durations)-1] {
-			table.Append([]string{"", "", "", "", "", ""})
+			tableRenderer.AppendSeparator()
 		}
 	}
 
-	table.Render()
+	tableRenderer.Render()
 	return nil
 }
 
@@ -166,29 +149,7 @@ func (c *RDSCommand) getRdsOnDemandPrice(cfg aws.Config, dbInstanceClass string,
 		return 0, err
 	}
 
-	if len(result.PriceList) > 0 {
-		// Parse JSON response to get the price
-		// This is a simplified version - you might need to handle the JSON parsing more carefully
-		var priceData map[string]interface{}
-		err = json.Unmarshal([]byte(result.PriceList[0]), &priceData)
-		if err != nil {
-			return 0, err
-		}
-
-		// Navigate through the price data structure
-		terms := priceData["terms"].(map[string]interface{})
-		onDemand := terms["OnDemand"].(map[string]interface{})
-		for _, v := range onDemand {
-			priceDimensions := v.(map[string]interface{})["priceDimensions"].(map[string]interface{})
-			for _, pd := range priceDimensions {
-				pricePerUnit := pd.(map[string]interface{})["pricePerUnit"].(map[string]interface{})
-				price, _ := strconv.ParseFloat(pricePerUnit["USD"].(string), 64)
-				return price * 24 * 30, nil // Convert to monthly price
-			}
-		}
-	}
-
-	return 0, fmt.Errorf("no pricing information found")
+	return extractPriceFromResult(result)
 }
 
 func (c *RDSCommand) getDeploymentOption(multiAz bool) string {
@@ -196,4 +157,20 @@ func (c *RDSCommand) getDeploymentOption(multiAz bool) string {
 		return "Multi-AZ"
 	}
 	return "Single-AZ"
+}
+
+func (c *RDSCommand) getOffering(offerings []rdsTypes.ReservedDBInstancesOffering, productDescription string, multiAz bool) *rdsTypes.ReservedDBInstancesOffering {
+	for _, offering := range offerings {
+		if *offering.ProductDescription == productDescription && *offering.MultiAZ == multiAz {
+			return &offering
+		}
+	}
+	return nil
+}
+
+func (c *RDSCommand) getDatabaseEngine(productDescription string) (string, error) {
+	if strings.Contains(productDescription, "postgres") {
+		return "PostgreSQL", nil
+	}
+	return "", fmt.Errorf("unsupported database engine: %s", productDescription)
 }
