@@ -2,7 +2,7 @@ module github.com/takaishi/awsri
 
 go 1.22
 
-toolchain go1.23.5
+toolchain go1.24.1
 
 require (
 	github.com/alecthomas/kong v1.8.1
