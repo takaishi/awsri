@@ -3,7 +3,7 @@
 ## Instalation
 
 ```
-% go install github.com/takaishi/awsri@latest
+% go install github.com/takaishi/awsri/cmd/awsri@${version}
 ```
 
 ## Usage
