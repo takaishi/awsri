@@ -318,7 +318,7 @@ func (c *TotalCommand) renderResult(result TotalPriceResult) {
 
 		tableRenderer.AppendReservedRow(
 			c.opts.Duration,
-			fmt.Sprintf("%s (%s x%d)", c.opts.OfferingType, serviceName, instance.Count),
+			fmt.Sprintf("%s (%s %s x%d)", c.opts.OfferingType, serviceName, instance.InstanceType, instance.Count),
 			instance.Upfront,
 			instance.Monthly,
 			instance.Yearly,
