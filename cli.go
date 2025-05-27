@@ -17,7 +17,26 @@ type GlobalOptions struct {
 type CLI struct {
 	RDS         RDSOption         `cmd:"rds" help:"RDS"`
 	Elasticache ElasticacheOption `cmd:"elasticache" help:"ElastiCache"`
+	Total       TotalOption       `cmd:"total" help:"Calculate total cost of multiple RIs"`
+	Generate    GenerateOption    `cmd:"generate" help:"Generate total command arguments from AWS account"`
 	Version     struct{}          `cmd:"version" help:"show version"`
+}
+
+type TotalOption struct {
+	RDSInstances         []string `name:"rds" help:"RDS instances in format: instance-type:count:product-description:multi-az"`
+	ElasticacheInstances []string `name:"elasticache" help:"ElastiCache instances in format: node-type:count:product-description"`
+	Duration             int      `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
+	OfferingType         string   `name:"offering-type" default:"Partial Upfront" help:"Offering type (No Upfront, Partial Upfront, All Upfront)"`
+	Format               string   `name:"format" default:"table" help:"Output format (table, csv)"`
+}
+
+type GenerateOption struct {
+	Region            string `name:"region" default:"ap-northeast-1" help:"AWS region"`
+	RDSEngine         string `name:"rds-engine" default:"postgresql" help:"Default engine type for RDS instances"`
+	ElastiCacheEngine string `name:"elasticache-engine" default:"redis" help:"Default engine type for ElastiCache instances"`
+	Duration          int    `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
+	OfferingType      string `name:"offering-type" default:"Partial Upfront" help:"Offering type (No Upfront, Partial Upfront, All Upfront)"`
+	Output            string `name:"output" default:"command" help:"Output format (command, args, json)"`
 }
 
 func RunCLI(ctx context.Context, args []string) error {
@@ -46,6 +65,12 @@ func Dispatch(ctx context.Context, command string, cli *CLI) error {
 		return cmd.Run(ctx)
 	case "elasticache":
 		cmd := NewElastiCacheCommand(cli.Elasticache)
+		return cmd.Run(ctx)
+	case "total":
+		cmd := NewTotalCommand(cli.Total)
+		return cmd.Run(ctx)
+	case "generate":
+		cmd := NewGenerateCommand(cli.Generate)
 		return cmd.Run(ctx)
 	case "version":
 		fmt.Printf("%s-%s\n", Version, Revision)

@@ -90,6 +90,24 @@ func (t *TableRenderer) AppendSeparator() {
 	t.table.Append([]string{"", "", "", "", "", ""})
 }
 
+// AppendTotalRow adds a total row to the table
+func (t *TableRenderer) AppendTotalRow(
+	duration int,
+	label string,
+	totalUpfront float64,
+	totalMonthly float64,
+	totalYearly float64,
+) {
+	t.table.Append([]string{
+		fmt.Sprintf("%dy", duration),
+		label,
+		fmt.Sprintf("%.1f", totalUpfront),
+		fmt.Sprintf("%.1f", totalMonthly),
+		fmt.Sprintf("%.1f", totalYearly),
+		"-",
+	})
+}
+
 // Render renders the table
 func (t *TableRenderer) Render() {
 	t.table.Render()
