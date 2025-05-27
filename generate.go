@@ -180,8 +180,7 @@ func (c *GenerateCommand) formatOutput(instances []InstanceInfo, format string) 
 // formatCommandOutput はコマンド形式で出力を生成する
 func (c *GenerateCommand) formatCommandOutput(instances []InstanceInfo) string {
 	args := c.formatArgsOutput(instances)
-	return fmt.Sprintf("awsri total %s --duration=%d --offering-type=\"%s\"", 
-		args, c.opts.Duration, c.opts.OfferingType)
+	return fmt.Sprintf("%s", args)
 }
 
 // formatArgsOutput は引数のみの形式で出力を生成する
