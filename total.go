@@ -309,8 +309,30 @@ func (c *TotalCommand) renderResult(result TotalPriceResult) {
 	// テーブルレンダラーを作成
 	tableRenderer := NewTableRenderer()
 
-	// 各インスタンスの結果を表示
+	// 同じインスタンスタイプをまとめるためのマップ
+	// キー: "サービスタイプ:インスタンスタイプ" (例: "rds:db.m5.large")
+	// 値: まとめた結果
+	groupedInstances := make(map[string]InstancePriceResult)
+
+	// 各インスタンスの結果をグループ化
 	for _, instance := range result.Instances {
+		key := fmt.Sprintf("%s:%s", instance.ServiceType, instance.InstanceType)
+		
+		if existing, ok := groupedInstances[key]; ok {
+			// 既存のエントリがある場合は値を合算
+			existing.Count += instance.Count
+			existing.Upfront += instance.Upfront
+			existing.Monthly += instance.Monthly
+			existing.Yearly += instance.Yearly
+			groupedInstances[key] = existing
+		} else {
+			// 新しいエントリを追加
+			groupedInstances[key] = instance
+		}
+	}
+
+	// グループ化した結果を表示
+	for _, instance := range groupedInstances {
 		serviceName := "RDS"
 		if instance.ServiceType == "elasticache" {
 			serviceName = "ElastiCache"
