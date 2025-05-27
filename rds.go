@@ -169,7 +169,7 @@ func (c *RDSCommand) getOffering(offerings []rdsTypes.ReservedDBInstancesOfferin
 }
 
 func (c *RDSCommand) getDatabaseEngine(productDescription string) (string, error) {
-	if strings.Contains(productDescription, "postgresql") {
+	if strings.Contains(productDescription, "postgresql") || strings.Contains(productDescription, "postgres") {
 		return "PostgreSQL", nil
 	}
 	return "", fmt.Errorf("unsupported database engine: %s", productDescription)
