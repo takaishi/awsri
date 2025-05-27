@@ -306,9 +306,6 @@ func (c *TotalCommand) calculateElastiCachePrice(ctx context.Context, cfg aws.Co
 
 // renderResult は計算結果を表示する
 func (c *TotalCommand) renderResult(result TotalPriceResult) {
-	// テーブルレンダラーを作成
-	tableRenderer := NewTableRenderer()
-
 	// 同じインスタンスタイプをまとめるためのマップ
 	// キー: "サービスタイプ:インスタンスタイプ" (例: "rds:db.m5.large")
 	// 値: まとめた結果
@@ -330,6 +327,20 @@ func (c *TotalCommand) renderResult(result TotalPriceResult) {
 			groupedInstances[key] = instance
 		}
 	}
+
+	// 出力形式に応じて表示方法を切り替え
+	switch c.opts.Format {
+	case "csv":
+		c.renderCSV(result, groupedInstances)
+	default: // "table"
+		c.renderTable(result, groupedInstances)
+	}
+}
+
+// renderTable はテーブル形式で結果を表示する
+func (c *TotalCommand) renderTable(result TotalPriceResult, groupedInstances map[string]InstancePriceResult) {
+	// テーブルレンダラーを作成
+	tableRenderer := NewTableRenderer()
 
 	// グループ化した結果を表示
 	for _, instance := range groupedInstances {
@@ -363,4 +374,41 @@ func (c *TotalCommand) renderResult(result TotalPriceResult) {
 
 	// テーブルをレンダリング
 	tableRenderer.Render()
+}
+
+// renderCSV はCSV形式で結果を表示する
+func (c *TotalCommand) renderCSV(result TotalPriceResult, groupedInstances map[string]InstancePriceResult) {
+	// CSVヘッダーを出力
+	fmt.Println("Duration,OfferingType,ServiceType,InstanceType,Count,Upfront,Monthly,Yearly")
+
+	// グループ化した結果を表示
+	for _, instance := range groupedInstances {
+		serviceName := "RDS"
+		if instance.ServiceType == "elasticache" {
+			serviceName = "ElastiCache"
+		}
+
+		fmt.Printf("%dy,%s,%s,%s,%d,%.1f,%.1f,%.1f\n",
+			c.opts.Duration,
+			c.opts.OfferingType,
+			serviceName,
+			instance.InstanceType,
+			instance.Count,
+			instance.Upfront,
+			instance.Monthly,
+			instance.Yearly,
+		)
+	}
+
+	// 合計を表示
+	fmt.Printf("%dy,%s,%s,%s,%s,%.1f,%.1f,%.1f\n",
+		c.opts.Duration,
+		"Total",
+		"",
+		"",
+		"",
+		result.TotalUpfront,
+		result.TotalMonthly,
+		result.TotalYearly,
+	)
 }

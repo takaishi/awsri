@@ -27,6 +27,7 @@ type TotalOption struct {
 	ElasticacheInstances []string `name:"elasticache" help:"ElastiCache instances in format: node-type:count:product-description"`
 	Duration             int      `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
 	OfferingType         string   `name:"offering-type" default:"Partial Upfront" help:"Offering type (No Upfront, Partial Upfront, All Upfront)"`
+	Format               string   `name:"format" default:"table" help:"Output format (table, csv)"`
 }
 
 type GenerateOption struct {
