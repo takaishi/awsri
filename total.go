@@ -233,13 +233,22 @@ func (c *TotalCommand) calculateRDSPrice(ctx context.Context, cfg aws.Config, in
 	}
 
 	if len(o.ReservedDBInstancesOfferings) == 0 {
-		return 0, 0, 0, fmt.Errorf("no reserved instances offerings found for RDS %s", instance.InstanceType)
+		return 0, 0, 0, fmt.Errorf("no reserved instances offerings found for RDS %s with description %s and MultiAZ=%v",
+			instance.InstanceType, instance.Description, instance.MultiAz)
 	}
 
 	// 適切なオファリングを取得
 	offering := rdsCmd.getOffering(o.ReservedDBInstancesOfferings, instance.Description, instance.MultiAz)
 	if offering == nil {
-		return 0, 0, 0, fmt.Errorf("no matching offering found for RDS %s", instance.InstanceType)
+		// 利用可能なオファリングの説明を表示
+		availableDescriptions := []string{}
+		for _, o := range o.ReservedDBInstancesOfferings {
+			desc := fmt.Sprintf("%s (MultiAZ=%v)", *o.ProductDescription, *o.MultiAZ)
+			availableDescriptions = append(availableDescriptions, desc)
+		}
+		
+		return 0, 0, 0, fmt.Errorf("no matching offering found for RDS %s with description %s and MultiAZ=%v. Available offerings: %s",
+			instance.InstanceType, instance.Description, instance.MultiAz, strings.Join(availableDescriptions, ", "))
 	}
 
 	// 料金を計算

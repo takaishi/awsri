@@ -160,17 +160,71 @@ func (c *RDSCommand) getDeploymentOption(multiAz bool) string {
 }
 
 func (c *RDSCommand) getOffering(offerings []rdsTypes.ReservedDBInstancesOffering, productDescription string, multiAz bool) *rdsTypes.ReservedDBInstancesOffering {
+	// まず完全一致を試みる
 	for _, offering := range offerings {
 		if *offering.ProductDescription == productDescription && *offering.MultiAZ == multiAz {
 			return &offering
 		}
 	}
+	
+	// 完全一致がない場合、部分一致を試みる
+	for _, offering := range offerings {
+		// PostgreSQLの場合、"postgres"または"postgresql"を含む場合にマッチさせる
+		if (strings.Contains(strings.ToLower(productDescription), "postgres") &&
+			strings.Contains(strings.ToLower(*offering.ProductDescription), "postgres")) &&
+			*offering.MultiAZ == multiAz {
+			return &offering
+		}
+	}
+	
+	// それでもマッチしない場合、MultiAZの条件を無視して部分一致を試みる
+	for _, offering := range offerings {
+		if strings.Contains(strings.ToLower(productDescription), "postgres") &&
+			strings.Contains(strings.ToLower(*offering.ProductDescription), "postgres") {
+			return &offering
+		}
+	}
+	
+	// 最後の手段として、最初のオファリングを返す（オファリングが存在する場合）
+	if len(offerings) > 0 {
+		return &offerings[0]
+	}
+	
 	return nil
 }
 
 func (c *RDSCommand) getDatabaseEngine(productDescription string) (string, error) {
-	if strings.Contains(productDescription, "postgresql") || strings.Contains(productDescription, "postgres") {
+	productDescriptionLower := strings.ToLower(productDescription)
+	
+	if strings.Contains(productDescriptionLower, "postgresql") || strings.Contains(productDescriptionLower, "postgres") {
 		return "PostgreSQL", nil
 	}
+	if strings.Contains(productDescriptionLower, "mysql") {
+		return "MySQL", nil
+	}
+	if strings.Contains(productDescriptionLower, "mariadb") {
+		return "MariaDB", nil
+	}
+	if strings.Contains(productDescriptionLower, "oracle") {
+		return "Oracle", nil
+	}
+	if strings.Contains(productDescriptionLower, "sqlserver") || strings.Contains(productDescriptionLower, "sql server") {
+		return "SQLServer", nil
+	}
+	if strings.Contains(productDescriptionLower, "aurora") {
+		if strings.Contains(productDescriptionLower, "mysql") {
+			return "Aurora MySQL", nil
+		}
+		if strings.Contains(productDescriptionLower, "postgresql") || strings.Contains(productDescriptionLower, "postgres") {
+			return "Aurora PostgreSQL", nil
+		}
+		return "Aurora", nil
+	}
+	
+	// 不明なエンジンの場合でも、productDescriptionをそのまま返す
+	if productDescription != "" {
+		return productDescription, nil
+	}
+	
 	return "", fmt.Errorf("unsupported database engine: %s", productDescription)
 }
