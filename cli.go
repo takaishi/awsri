@@ -17,6 +17,7 @@ type GlobalOptions struct {
 type CLI struct {
 	RDS         RDSOption         `cmd:"rds" help:"RDS"`
 	Elasticache ElasticacheOption `cmd:"elasticache" help:"ElastiCache"`
+	Fargate     FargateOption     `cmd:"fargate" help:"Fargate Savings Plan"`
 	Total       TotalOption       `cmd:"total" help:"Calculate total cost of multiple RIs"`
 	Generate    GenerateOption    `cmd:"generate" help:"Generate total command arguments from AWS account"`
 	Version     struct{}          `cmd:"version" help:"show version"`
@@ -65,6 +66,9 @@ func Dispatch(ctx context.Context, command string, cli *CLI) error {
 		return cmd.Run(ctx)
 	case "elasticache":
 		cmd := NewElastiCacheCommand(cli.Elasticache)
+		return cmd.Run(ctx)
+	case "fargate":
+		cmd := NewFargateCommand(cli.Fargate)
 		return cmd.Run(ctx)
 	case "total":
 		cmd := NewTotalCommand(cli.Total)
