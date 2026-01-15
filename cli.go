@@ -18,6 +18,7 @@ type CLI struct {
 	RDS         RDSOption         `cmd:"rds" help:"RDS"`
 	Elasticache ElasticacheOption `cmd:"elasticache" help:"ElastiCache"`
 	Fargate     FargateOption     `cmd:"fargate" help:"Fargate Savings Plan"`
+	Ec2 EC2Option `cmd:"ec2" help:"EC2 Compute Savings Plan"`
 	Total       TotalOption       `cmd:"total" help:"Calculate total cost of multiple RIs"`
 	Generate    GenerateOption    `cmd:"generate" help:"Generate total command arguments from AWS account"`
 	Version     struct{}          `cmd:"version" help:"show version"`
@@ -42,6 +43,10 @@ type GenerateOption struct {
 
 func RunCLI(ctx context.Context, args []string) error {
 	var cli CLI
+	// KongがEc2をec-2に変換するため、ec2をec-2に変換
+	if len(args) > 0 && args[0] == "ec2" {
+		args[0] = "ec-2"
+	}
 	parser, err := kong.New(&cli)
 	if err != nil {
 		return fmt.Errorf("error creating CLI parser: %w", err)
@@ -52,6 +57,10 @@ func RunCLI(ctx context.Context, args []string) error {
 		return fmt.Errorf("error parsing CLI: %w", err)
 	}
 	cmd := strings.Fields(kctx.Command())[0]
+	// KongがEC2をec-2に変換するため、ec-2をec2に変換
+	if cmd == "ec-2" {
+		cmd = "ec2"
+	}
 	if cmd == "version" {
 		fmt.Println(Version)
 		return nil
@@ -69,6 +78,9 @@ func Dispatch(ctx context.Context, command string, cli *CLI) error {
 		return cmd.Run(ctx)
 	case "fargate":
 		cmd := NewFargateCommand(cli.Fargate)
+		return cmd.Run(ctx)
+	case "ec2", "ec-2":
+		cmd := NewEC2Command(cli.Ec2)
 		return cmd.Run(ctx)
 	case "total":
 		cmd := NewTotalCommand(cli.Total)
