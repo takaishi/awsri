@@ -15,13 +15,12 @@ type GlobalOptions struct {
 }
 
 type CLI struct {
-	RDS         RDSOption         `cmd:"rds" help:"RDS"`
-	Elasticache ElasticacheOption `cmd:"elasticache" help:"ElastiCache"`
-	Fargate     FargateOption     `cmd:"fargate" help:"Fargate Savings Plan"`
-	Ec2 EC2Option `cmd:"ec2" help:"EC2 Compute Savings Plan"`
-	Total       TotalOption       `cmd:"total" help:"Calculate total cost of multiple RIs"`
-	Generate    GenerateOption    `cmd:"generate" help:"Generate total command arguments from AWS account"`
-	Version     struct{}          `cmd:"version" help:"show version"`
+	RDS                 RDSOption                 `cmd:"rds" help:"RDS"`
+	Elasticache         ElasticacheOption         `cmd:"elasticache" help:"ElastiCache"`
+	ComputeSavingsPlans ComputeSavingsPlansOption `cmd:"compute-savings-plans" help:"Compute Savings Plans"`
+	Total               TotalOption               `cmd:"total" help:"Calculate total cost of multiple RIs"`
+	Generate            GenerateOption            `cmd:"generate" help:"Generate total command arguments from AWS account"`
+	Version             struct{}                  `cmd:"version" help:"show version"`
 }
 
 type TotalOption struct {
@@ -43,9 +42,9 @@ type GenerateOption struct {
 
 func RunCLI(ctx context.Context, args []string) error {
 	var cli CLI
-	// KongがEc2をec-2に変換するため、ec2をec-2に変換
-	if len(args) > 0 && args[0] == "ec2" {
-		args[0] = "ec-2"
+	// KongがEc2をec-2に変換するため、compute-savings-plans ec2をcompute-savings-plans ec-2に変換
+	if len(args) > 1 && args[0] == "compute-savings-plans" && args[1] == "ec2" {
+		args[1] = "ec-2"
 	}
 	parser, err := kong.New(&cli)
 	if err != nil {
@@ -56,11 +55,9 @@ func RunCLI(ctx context.Context, args []string) error {
 		fmt.Printf("error parsing CLI: %v\n", err)
 		return fmt.Errorf("error parsing CLI: %w", err)
 	}
-	cmd := strings.Fields(kctx.Command())[0]
+	cmd := kctx.Command()
 	// KongがEC2をec-2に変換するため、ec-2をec2に変換
-	if cmd == "ec-2" {
-		cmd = "ec2"
-	}
+	cmd = strings.ReplaceAll(cmd, "ec-2", "ec2")
 	if cmd == "version" {
 		fmt.Println(Version)
 		return nil
@@ -69,19 +66,31 @@ func RunCLI(ctx context.Context, args []string) error {
 }
 
 func Dispatch(ctx context.Context, command string, cli *CLI) error {
-	switch command {
+	// コマンドを分割して、サブコマンドを確認
+	parts := strings.Fields(command)
+
+	switch parts[0] {
 	case "rds":
 		cmd := NewRDSCommand(cli.RDS)
 		return cmd.Run(ctx)
 	case "elasticache":
 		cmd := NewElastiCacheCommand(cli.Elasticache)
 		return cmd.Run(ctx)
-	case "fargate":
-		cmd := NewFargateCommand(cli.Fargate)
-		return cmd.Run(ctx)
-	case "ec2", "ec-2":
-		cmd := NewEC2Command(cli.Ec2)
-		return cmd.Run(ctx)
+	case "compute-savings-plans":
+		if len(parts) < 2 {
+			return fmt.Errorf("compute-savings-plans requires a subcommand (fargate or ec2)")
+		}
+		subcommand := parts[1]
+		switch subcommand {
+		case "fargate":
+			cmd := NewFargateCommand(cli.ComputeSavingsPlans.Fargate)
+			return cmd.Run(ctx)
+		case "ec2", "ec-2":
+			cmd := NewEC2Command(cli.ComputeSavingsPlans.Ec2)
+			return cmd.Run(ctx)
+		default:
+			return fmt.Errorf("unknown subcommand for compute-savings-plans: %s (must be fargate or ec2)", subcommand)
+		}
 	case "total":
 		cmd := NewTotalCommand(cli.Total)
 		return cmd.Run(ctx)
