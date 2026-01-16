@@ -42,10 +42,6 @@ type GenerateOption struct {
 
 func RunCLI(ctx context.Context, args []string) error {
 	var cli CLI
-	// KongがEc2をec-2に変換するため、compute-savings-plans ec2をcompute-savings-plans ec-2に変換
-	if len(args) > 1 && args[0] == "compute-savings-plans" && args[1] == "ec2" {
-		args[1] = "ec-2"
-	}
 	parser, err := kong.New(&cli)
 	if err != nil {
 		return fmt.Errorf("error creating CLI parser: %w", err)
@@ -56,8 +52,6 @@ func RunCLI(ctx context.Context, args []string) error {
 		return fmt.Errorf("error parsing CLI: %w", err)
 	}
 	cmd := kctx.Command()
-	// KongがEC2をec-2に変換するため、ec-2をec2に変換
-	cmd = strings.ReplaceAll(cmd, "ec-2", "ec2")
 	if cmd == "version" {
 		fmt.Println(Version)
 		return nil
@@ -85,7 +79,7 @@ func Dispatch(ctx context.Context, command string, cli *CLI) error {
 		case "fargate":
 			cmd := NewFargateCommand(cli.ComputeSavingsPlans.Fargate)
 			return cmd.Run(ctx)
-		case "ec2", "ec-2":
+		case "ec2":
 			cmd := NewEC2Command(cli.ComputeSavingsPlans.Ec2)
 			return cmd.Run(ctx)
 		default:
