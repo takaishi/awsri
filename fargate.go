@@ -255,21 +255,21 @@ func (c *FargateCommand) extractOnDemandPriceFromResult(priceListEntry string) (
 				continue
 			}
 
-		// Check unit field (convert from seconds to hours if needed)
-		unit, _ := dimensionData["unit"].(string)
+			// Check unit field (convert from seconds to hours if needed)
+			unit, _ := dimensionData["unit"].(string)
 
-		if usdPrice, ok := pricePerUnit["USD"].(string); ok {
-			price, err := strconv.ParseFloat(usdPrice, 64)
-			if err != nil {
-				continue
-			}
+			if usdPrice, ok := pricePerUnit["USD"].(string); ok {
+				price, err := strconv.ParseFloat(usdPrice, 64)
+				if err != nil {
+					continue
+				}
 
-			// Convert from seconds to hours if unit is in seconds (seconds × 3600 = hours)
-			if strings.Contains(strings.ToLower(unit), "second") || strings.Contains(strings.ToLower(unit), "sec") {
-				price = price * 3600.0
-			}
+				// Convert from seconds to hours if unit is in seconds (seconds × 3600 = hours)
+				if strings.Contains(strings.ToLower(unit), "second") || strings.Contains(strings.ToLower(unit), "sec") {
+					price = price * 3600.0
+				}
 
-			return price, nil // Return price per hour
+				return price, nil // Return price per hour
 			}
 		}
 	}
@@ -609,7 +609,7 @@ func (c *FargateCommand) mapRegionToLocation(region string) string {
 func (c *FargateCommand) renderCSV(hourlyCommitment, spPurchaseAmount, currentCost, spCost, savingsAmount, savingsRate float64, noHeader bool) {
 	// Output CSV header (only if noHeader is false)
 	if !noHeader {
-		fmt.Println("Hourly commitment,購入するSP/RI (USD),現在のコスト(USD/月),購入後のコスト(USD/月),削減コスト,削減率")
+		fmt.Println("Hourly commitment,SP/RI Purchase Amount (USD),Current Cost (USD/month),Cost After Purchase (USD/month),Savings Amount,Savings Rate")
 	}
 
 	// Output data row

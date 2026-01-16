@@ -389,7 +389,7 @@ func (c *EC2Command) mapRegionToLocation(region string) string {
 func (c *EC2Command) renderCSV(hourlyCommitment, spPurchaseAmount, currentCost, spCost, savingsAmount, savingsRate float64, noHeader bool) {
 	// Output CSV header (only if noHeader is false)
 	if !noHeader {
-		fmt.Println("Hourly commitment,購入するSP/RI (USD),現在のコスト(USD/月),購入後のコスト(USD/月),削減コスト,削減率")
+		fmt.Println("Hourly commitment,SP/RI Purchase Amount (USD),Current Cost (USD/month),Cost After Purchase (USD/month),Savings Amount,Savings Rate")
 	}
 
 	// Output data row
