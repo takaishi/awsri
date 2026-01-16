@@ -22,7 +22,7 @@ type FargateOption struct {
 	TaskCount       int     `required:"" help:"Number of tasks"`
 	Duration        int     `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
 	Architecture    string  `name:"architecture" default:"linux" help:"Architecture (linux or arm)"`
-	PaymentOption   string  `name:"payment-option" default:"No Upfront" help:"Payment option (No Upfront, Partial Upfront, All Upfront)"`
+	PaymentOption   string  `name:"payment-option" default:"no-upfront" help:"Payment option (no-upfront, partial-upfront, all-upfront)"`
 	NoHeader        bool    `name:"no-header" help:"Do not output CSV header"`
 }
 
@@ -277,29 +277,39 @@ func (c *FargateCommand) extractOnDemandPriceFromResult(priceListEntry string) (
 	return 0, fmt.Errorf("price not found in pricing data")
 }
 
+// convertPaymentOptionToAWSFormat は小文字・ハイフンつなぎのpayment optionをAWS APIが期待する形式に変換します
+func convertPaymentOptionToAWSFormat(option string) (string, error) {
+	optionMap := map[string]string{
+		"no-upfront":      "No Upfront",
+		"partial-upfront": "Partial Upfront",
+		"all-upfront":     "All Upfront",
+	}
+
+	if awsFormat, ok := optionMap[option]; ok {
+		return awsFormat, nil
+	}
+
+	return "", fmt.Errorf("invalid payment option: %s (must be one of: no-upfront, partial-upfront, all-upfront)", option)
+}
+
 // getComputeSavingsPlanPrice はSavings Plans APIを使用してFargateのSavings Plan料金を取得します
 func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePricing, error) {
 	svc := savingsplans.NewFromConfig(cfg)
 
 	// 支払いオプションを引数から取得
-	// 有効な値: "No Upfront", "Partial Upfront", "All Upfront"
 	paymentOptionStr := c.opts.PaymentOption
 	// デフォルト値の設定
 	if paymentOptionStr == "" {
-		paymentOptionStr = "No Upfront"
+		paymentOptionStr = "no-upfront"
 	}
 
-	// 有効な値かチェック
-	validOptions := map[string]bool{
-		"No Upfront":      true,
-		"Partial Upfront": true,
-		"All Upfront":     true,
-	}
-	if !validOptions[paymentOptionStr] {
-		return nil, fmt.Errorf("invalid payment option: %s (must be one of: No Upfront, Partial Upfront, All Upfront)", paymentOptionStr)
+	// 小文字・ハイフンつなぎの値をAWS APIが期待する形式に変換
+	awsPaymentOption, err := convertPaymentOptionToAWSFormat(paymentOptionStr)
+	if err != nil {
+		return nil, err
 	}
 
-	paymentOption := savingsplansTypes.SavingsPlanPaymentOption(paymentOptionStr)
+	paymentOption := savingsplansTypes.SavingsPlanPaymentOption(awsPaymentOption)
 
 	// Savings Plans Offering Ratesを取得
 	// リージョンフィルタを追加
@@ -334,14 +344,14 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 
 	if len(result.SearchResults) == 0 {
 		// 指定された支払いオプションで見つからない場合、他のオプションを試す
-		// No Upfrontで見つからない場合、All Upfrontを試す
-		if paymentOptionStr == "No Upfront" {
+		// no-upfrontで見つからない場合、all-upfrontを試す
+		if paymentOptionStr == "no-upfront" {
 			input.SavingsPlanPaymentOptions = []savingsplansTypes.SavingsPlanPaymentOption{
 				savingsplansTypes.SavingsPlanPaymentOptionAllUpfront,
 			}
 			result, err = svc.DescribeSavingsPlansOfferingRates(context.TODO(), input)
 			if err != nil {
-				return nil, fmt.Errorf("failed to describe savings plans offering rates (All Upfront): %v", err)
+				return nil, fmt.Errorf("failed to describe savings plans offering rates (all-upfront): %v", err)
 			}
 		}
 		if len(result.SearchResults) == 0 {

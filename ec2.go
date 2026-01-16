@@ -16,12 +16,12 @@ import (
 )
 
 type EC2Option struct {
-	Region          string `name:"region" default:"ap-northeast-1" help:"AWS region"`
-	InstanceType    string `name:"instance-type" required:"" help:"EC2 instance type (e.g., m5.large)"`
-	Count           int    `name:"count" required:"" help:"Number of instances"`
-	Duration        int    `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
-	PaymentOption   string `name:"payment-option" default:"No Upfront" help:"Payment option (No Upfront, Partial Upfront, All Upfront)"`
-	NoHeader        bool   `name:"no-header" help:"Do not output CSV header"`
+	Region        string `name:"region" default:"ap-northeast-1" help:"AWS region"`
+	InstanceType  string `name:"instance-type" required:"" help:"EC2 instance type (e.g., m5.large)"`
+	Count         int    `name:"count" required:"" help:"Number of instances"`
+	Duration      int    `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
+	PaymentOption string `name:"payment-option" default:"no-upfront" help:"Payment option (no-upfront, partial-upfront, all-upfront)"`
+	NoHeader      bool   `name:"no-header" help:"Do not output CSV header"`
 }
 
 type EC2Command struct {
@@ -202,20 +202,16 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 	// 支払いオプションを引数から取得
 	paymentOptionStr := c.opts.PaymentOption
 	if paymentOptionStr == "" {
-		paymentOptionStr = "No Upfront"
+		paymentOptionStr = "no-upfront"
 	}
 
-	// 有効な値かチェック
-	validOptions := map[string]bool{
-		"No Upfront":      true,
-		"Partial Upfront": true,
-		"All Upfront":     true,
-	}
-	if !validOptions[paymentOptionStr] {
-		return 0, fmt.Errorf("invalid payment option: %s (must be one of: No Upfront, Partial Upfront, All Upfront)", paymentOptionStr)
+	// 小文字・ハイフンつなぎの値をAWS APIが期待する形式に変換
+	awsPaymentOption, err := convertPaymentOptionToAWSFormat(paymentOptionStr)
+	if err != nil {
+		return 0, err
 	}
 
-	paymentOption := savingsplansTypes.SavingsPlanPaymentOption(paymentOptionStr)
+	paymentOption := savingsplansTypes.SavingsPlanPaymentOption(awsPaymentOption)
 
 	// Savings Plans Offering Ratesを取得
 	durationSeconds := int64(c.opts.Duration * 365 * 24 * 60 * 60) // 年数を秒に変換
@@ -257,13 +253,13 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 
 	if len(result.SearchResults) == 0 {
 		// 指定された支払いオプションで見つからない場合、他のオプションを試す
-		if paymentOptionStr == "No Upfront" {
+		if paymentOptionStr == "no-upfront" {
 			input.SavingsPlanPaymentOptions = []savingsplansTypes.SavingsPlanPaymentOption{
 				savingsplansTypes.SavingsPlanPaymentOptionAllUpfront,
 			}
 			result, err = svc.DescribeSavingsPlansOfferingRates(context.TODO(), input)
 			if err != nil {
-				return 0, fmt.Errorf("failed to describe savings plans offering rates (All Upfront): %v", err)
+				return 0, fmt.Errorf("failed to describe savings plans offering rates (all-upfront): %v", err)
 			}
 		}
 		if len(result.SearchResults) == 0 {
