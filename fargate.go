@@ -17,11 +17,11 @@ import (
 
 type FargateOption struct {
 	Region          string  `name:"region" default:"ap-northeast-1" help:"AWS region"`
-	MemoryGBPerHour float64 `required:"" help:"Memory MB per hour (will be converted to GB)"`
-	VCPUPerHour     float64 `required:"" help:"vCPU millicores per hour (will be converted to vCPU)"`
+	MemoryMBPerHour float64 `required:"" help:"Memory MB per hour (will be converted to GB)"`
+	VCPUMillicoresPerHour float64 `required:"" help:"vCPU millicores per hour (will be converted to vCPU)"`
 	TaskCount       int     `required:"" help:"Number of tasks"`
 	Duration        int     `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
-	Architecture    string  `name:"architecture" default:"linux" help:"Architecture (linux or arm)"`
+	Architecture    string  `name:"architecture" default:"x86_64" help:"Architecture (x86_64 or arm)"`
 	PaymentOption   string  `name:"payment-option" default:"no-upfront" help:"Payment option (no-upfront, partial-upfront, all-upfront)"`
 	NoHeader        bool    `name:"no-header" help:"Do not output CSV header"`
 }
@@ -42,29 +42,34 @@ func NewFargateCommand(opts FargateOption) *FargateCommand {
 }
 
 func (c *FargateCommand) Run(ctx context.Context) error {
-	// Pricing APIとSavings Plans APIはus-east-1でのみ利用可能
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
+	// Pricing API and Savings Plans API are only available in us-east-1
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
 	if err != nil {
 		return fmt.Errorf("unable to load SDK config: %v", err)
 	}
 
 	// Get on-demand pricing
-	onDemandPricing, err := c.getFargateOnDemandPrice(cfg)
+	onDemandPricing, err := c.getFargateOnDemandPrice(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to get on-demand price: %v", err)
 	}
 
 	// Get Savings Plan pricing
-	spPricing, err := c.getComputeSavingsPlanPrice(cfg)
+	spPricing, err := c.getComputeSavingsPlanPrice(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to get Savings Plan price: %v", err)
 	}
 
+	// Validate duration (must be 1 or 3 years)
+	if c.opts.Duration != 1 && c.opts.Duration != 3 {
+		return fmt.Errorf("duration must be 1 or 3 years, got: %d", c.opts.Duration)
+	}
+
 	// Convert input parameter units
-	// vCPU: may be in millicores, so divide by 1024 to convert to vCPU count
-	// Memory: may be in MB, so divide by 1024 to convert to GB
-	vcpuCount := c.opts.VCPUPerHour / 1024.0
-	memoryGB := c.opts.MemoryGBPerHour / 1024.0
+	// vCPU: millicores to vCPU (divide by 1000, following Kubernetes convention)
+	// Memory: MB to GB (divide by 1024)
+	vcpuCount := c.opts.VCPUMillicoresPerHour / 1000.0
+	memoryGB := c.opts.MemoryMBPerHour / 1024.0
 
 	// Calculate monthly cost (720 hours/month)
 	// TaskCount × vCPU count × 720 hours × vCPU price + TaskCount × GB count × 720 hours × GB price
@@ -89,15 +94,15 @@ func (c *FargateCommand) Run(ctx context.Context) error {
 	savingsRate := (savingsAmount / currentCostPerMonth) * 100.0
 
 	// Output CSV
-	c.renderCSV(hourlyCommitment, spPurchaseAmount, currentCostPerMonth, spCostPerMonth, savingsAmount, savingsRate, c.opts.NoHeader)
+	renderCSV(hourlyCommitment, spPurchaseAmount, currentCostPerMonth, spCostPerMonth, savingsAmount, savingsRate, c.opts.NoHeader)
 
 	return nil
 }
 
 // getFargateOnDemandPrice retrieves Fargate on-demand pricing using the Pricing API
-func (c *FargateCommand) getFargateOnDemandPrice(cfg aws.Config) (*FargatePricing, error) {
+func (c *FargateCommand) getFargateOnDemandPrice(ctx context.Context, cfg aws.Config) (*FargatePricing, error) {
 	svc := pricing.NewFromConfig(cfg)
-	location := c.mapRegionToLocation(c.opts.Region)
+	location := mapRegionToLocation(c.opts.Region)
 
 	// Add architecture-based filter
 	processorArchitecture := "x86_64"
@@ -106,13 +111,13 @@ func (c *FargateCommand) getFargateOnDemandPrice(cfg aws.Config) (*FargatePricin
 	}
 
 	// Get vCPU pricing (using cputype=perCPU filter and architecture filter)
-	vcpuPrice, err := c.getFargateOnDemandPriceByType(svc, location, "cputype", "perCPU", processorArchitecture)
+	vcpuPrice, err := c.getFargateOnDemandPriceByType(ctx, svc, location, "cputype", "perCPU", processorArchitecture)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vCPU price: %v", err)
 	}
 
 	// Get memory pricing (using memorytype=perGB filter and architecture filter)
-	memoryPrice, err := c.getFargateOnDemandPriceByType(svc, location, "memorytype", "perGB", processorArchitecture)
+	memoryPrice, err := c.getFargateOnDemandPriceByType(ctx, svc, location, "memorytype", "perGB", processorArchitecture)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get memory price: %v", err)
 	}
@@ -124,7 +129,7 @@ func (c *FargateCommand) getFargateOnDemandPrice(cfg aws.Config) (*FargatePricin
 }
 
 // getFargateOnDemandPriceByType retrieves Fargate on-demand pricing with the specified filter type
-func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, location, filterType, filterValue, processorArchitecture string) (float64, error) {
+func (c *FargateCommand) getFargateOnDemandPriceByType(ctx context.Context, svc *pricing.Client, location, filterType, filterValue, processorArchitecture string) (float64, error) {
 	// First, search without architecture filter
 	filters := []types.Filter{
 		{
@@ -145,7 +150,7 @@ func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, loca
 		MaxResults:  aws.Int32(100),
 	}
 
-	result, err := svc.GetProducts(context.TODO(), input)
+	result, err := svc.GetProducts(ctx, input)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get products: %v", err)
 	}
@@ -203,78 +208,15 @@ func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, loca
 	}
 
 	if matchedPrice != "" {
-		return c.extractOnDemandPriceFromResult(matchedPrice)
+		return extractOnDemandPriceFromResult(matchedPrice)
 	}
 
 	// If architecture doesn't match, use the first result (fallback)
 	if len(result.PriceList) > 0 {
-		return c.extractOnDemandPriceFromResult(result.PriceList[0])
+		return extractOnDemandPriceFromResult(result.PriceList[0])
 	}
 
 	return 0, fmt.Errorf("no pricing information found")
-}
-
-// extractOnDemandPriceFromResult extracts on-demand pricing from Pricing API response
-func (c *FargateCommand) extractOnDemandPriceFromResult(priceListEntry string) (float64, error) {
-	var priceData map[string]interface{}
-	err := json.Unmarshal([]byte(priceListEntry), &priceData)
-	if err != nil {
-		return 0, fmt.Errorf("failed to unmarshal price data: %v", err)
-	}
-
-	// OnDemand料金を取得
-	terms, ok := priceData["terms"].(map[string]interface{})
-	if !ok {
-		return 0, fmt.Errorf("terms not found in pricing data")
-	}
-
-	onDemand, ok := terms["OnDemand"].(map[string]interface{})
-	if !ok {
-		return 0, fmt.Errorf("OnDemand terms not found")
-	}
-
-	for _, v := range onDemand {
-		termData, ok := v.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		priceDimensions, ok := termData["priceDimensions"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		for _, pd := range priceDimensions {
-			dimensionData, ok := pd.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			pricePerUnit, ok := dimensionData["pricePerUnit"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			// Check unit field (convert from seconds to hours if needed)
-			unit, _ := dimensionData["unit"].(string)
-
-			if usdPrice, ok := pricePerUnit["USD"].(string); ok {
-				price, err := strconv.ParseFloat(usdPrice, 64)
-				if err != nil {
-					continue
-				}
-
-				// Convert from seconds to hours if unit is in seconds (seconds × 3600 = hours)
-				if strings.Contains(strings.ToLower(unit), "second") || strings.Contains(strings.ToLower(unit), "sec") {
-					price = price * 3600.0
-				}
-
-				return price, nil // Return price per hour
-			}
-		}
-	}
-
-	return 0, fmt.Errorf("price not found in pricing data")
 }
 
 // convertPaymentOptionToAWSFormat converts lowercase hyphenated payment option to the format expected by AWS API
@@ -293,7 +235,7 @@ func convertPaymentOptionToAWSFormat(option string) (string, error) {
 }
 
 // getComputeSavingsPlanPrice retrieves Fargate Savings Plan pricing using the Savings Plans API
-func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePricing, error) {
+func (c *FargateCommand) getComputeSavingsPlanPrice(ctx context.Context, cfg aws.Config) (*FargatePricing, error) {
 	svc := savingsplans.NewFromConfig(cfg)
 
 	// Get payment option from arguments
@@ -337,7 +279,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 		MaxResults: 100,
 	}
 
-	result, err := svc.DescribeSavingsPlansOfferingRates(context.TODO(), input)
+	result, err := svc.DescribeSavingsPlansOfferingRates(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to describe savings plans offering rates: %v", err)
 	}
@@ -376,7 +318,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 		}
 
 		// Check if region matches
-		regionCode := c.getRegionCodeFromLocation(offering.Properties)
+		regionCode := getRegionCodeFromLocation(offering.Properties)
 		if regionCode != "" && regionCode != c.opts.Region {
 			continue
 		}
@@ -400,7 +342,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 				continue // Skip UsageType that contains ARM when Linux x86_64 is specified
 			}
 
-			// vCPUまたはMemoryのUsageTypeを判定
+			// Determine if UsageType is vCPU or Memory
 			if strings.Contains(usageType, "vcpu") || strings.Contains(usageType, "cpu") {
 				if offering.Rate != nil && !foundVCPU {
 					rate, err := strconv.ParseFloat(*offering.Rate, 64)
@@ -441,7 +383,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 						continue // Skip UsageType that contains ARM when Linux x86_64 is specified
 					}
 
-					// vCPUまたはMemoryのUsageTypeを判定
+					// Determine if UsageType is vCPU or Memory
 					if strings.Contains(usageType, "vcpu") || strings.Contains(usageType, "cpu") {
 						if offering.Rate != nil && !foundVCPU {
 							rate, err := strconv.ParseFloat(*offering.Rate, 64)
@@ -491,7 +433,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 				continue
 			}
 
-			regionCode := c.getRegionCodeFromLocation(offering.Properties)
+			regionCode := getRegionCodeFromLocation(offering.Properties)
 			if regionCode != "" && regionCode != c.opts.Region {
 				continue
 			}
@@ -555,71 +497,4 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 		VCPUSPPrice:   vcpuPrice,
 		MemorySPPrice: memoryPrice,
 	}, nil
-}
-
-// getRegionCodeFromLocation retrieves region code from Properties
-func (c *FargateCommand) getRegionCodeFromLocation(properties []savingsplansTypes.SavingsPlanOfferingRateProperty) string {
-	for _, prop := range properties {
-		if prop.Name != nil && *prop.Name == "regionCode" && prop.Value != nil {
-			return *prop.Value
-		}
-		if prop.Name != nil && *prop.Name == "location" && prop.Value != nil {
-			// Reverse lookup region code from location
-			return c.mapLocationToRegion(*prop.Value)
-		}
-	}
-	return ""
-}
-
-// mapLocationToRegion retrieves region code from location name
-func (c *FargateCommand) mapLocationToRegion(location string) string {
-	locationMap := map[string]string{
-		"Asia Pacific (Tokyo)":     "ap-northeast-1",
-		"US East (N. Virginia)":    "us-east-1",
-		"US West (Oregon)":         "us-west-2",
-		"EU (Ireland)":             "eu-west-1",
-		"Asia Pacific (Singapore)": "ap-southeast-1",
-		"Asia Pacific (Sydney)":    "ap-southeast-2",
-		"EU (Frankfurt)":           "eu-central-1",
-	}
-	if region, ok := locationMap[location]; ok {
-		return region
-	}
-	return ""
-}
-
-func (c *FargateCommand) mapRegionToLocation(region string) string {
-	// Map region name to Pricing API location format
-	locationMap := map[string]string{
-		"ap-northeast-1": "Asia Pacific (Tokyo)",
-		"us-east-1":      "US East (N. Virginia)",
-		"us-west-2":      "US West (Oregon)",
-		"eu-west-1":      "EU (Ireland)",
-		"ap-southeast-1": "Asia Pacific (Singapore)",
-		"ap-southeast-2": "Asia Pacific (Sydney)",
-		"eu-central-1":   "EU (Frankfurt)",
-	}
-	if location, ok := locationMap[region]; ok {
-		return location
-	}
-	// Default: use region name as is
-	return region
-}
-
-func (c *FargateCommand) renderCSV(hourlyCommitment, spPurchaseAmount, currentCost, spCost, savingsAmount, savingsRate float64, noHeader bool) {
-	// Output CSV header (only if noHeader is false)
-	if !noHeader {
-		fmt.Println("Hourly commitment,SP/RI Purchase Amount (USD),Current Cost (USD/month),Cost After Purchase (USD/month),Savings Amount,Savings Rate")
-	}
-
-	// Output data row
-	// hourly commitment doesn't need rounding, others don't need decimal places
-	fmt.Printf("%g,%.0f,%.0f,%.0f,%.0f,%.0f\n",
-		hourlyCommitment,
-		spPurchaseAmount,
-		currentCost,
-		spCost,
-		savingsAmount,
-		savingsRate,
-	)
 }

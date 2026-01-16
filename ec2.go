@@ -2,7 +2,6 @@ package awsri
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -38,20 +37,25 @@ func NewEC2Command(opts EC2Option) *EC2Command {
 }
 
 func (c *EC2Command) Run(ctx context.Context) error {
-	// Pricing APIとSavings Plans APIはus-east-1でのみ利用可能
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
+	// Validate duration (must be 1 or 3 years)
+	if c.opts.Duration != 1 && c.opts.Duration != 3 {
+		return fmt.Errorf("duration must be 1 or 3 years, got: %d", c.opts.Duration)
+	}
+
+	// Pricing API and Savings Plans API are only available in us-east-1
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
 	if err != nil {
 		return fmt.Errorf("unable to load SDK config: %v", err)
 	}
 
-	// オンデマンド料金を取得
+	// Get on-demand pricing
 	onDemandPrice, err := c.getEC2OnDemandPrice(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to get on-demand price: %v", err)
 	}
 
-	// Savings Plan料金を取得
-	spPrice, err := c.getComputeSavingsPlanPrice(cfg)
+	// Get Savings Plan pricing
+	spPrice, err := c.getComputeSavingsPlanPrice(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to get Savings Plan price: %v", err)
 	}
@@ -75,7 +79,7 @@ func (c *EC2Command) Run(ctx context.Context) error {
 	savingsRate := (savingsAmount / currentCostPerMonth) * 100.0
 
 	// Output CSV
-	c.renderCSV(hourlyCommitment, spPurchaseAmount, currentCostPerMonth, spCostPerMonth, savingsAmount, savingsRate, c.opts.NoHeader)
+	renderCSV(hourlyCommitment, spPurchaseAmount, currentCostPerMonth, spCostPerMonth, savingsAmount, savingsRate, c.opts.NoHeader)
 
 	return nil
 }
@@ -83,7 +87,7 @@ func (c *EC2Command) Run(ctx context.Context) error {
 // getEC2OnDemandPrice retrieves EC2 on-demand pricing using the Pricing API
 func (c *EC2Command) getEC2OnDemandPrice(cfg aws.Config) (float64, error) {
 	svc := pricing.NewFromConfig(cfg)
-	location := c.mapRegionToLocation(c.opts.Region)
+	location := mapRegionToLocation(c.opts.Region)
 
 	filters := []types.Filter{
 		{
@@ -129,74 +133,11 @@ func (c *EC2Command) getEC2OnDemandPrice(cfg aws.Config) (float64, error) {
 	}
 
 	// Extract pricing from the first result
-	return c.extractEC2OnDemandPriceFromResult(result.PriceList[0])
-}
-
-// extractEC2OnDemandPriceFromResult extracts EC2 on-demand pricing from Pricing API response
-func (c *EC2Command) extractEC2OnDemandPriceFromResult(priceListEntry string) (float64, error) {
-	var priceData map[string]interface{}
-	err := json.Unmarshal([]byte(priceListEntry), &priceData)
-	if err != nil {
-		return 0, fmt.Errorf("failed to unmarshal price data: %v", err)
-	}
-
-	// OnDemand料金を取得
-	terms, ok := priceData["terms"].(map[string]interface{})
-	if !ok {
-		return 0, fmt.Errorf("terms not found in pricing data")
-	}
-
-	onDemand, ok := terms["OnDemand"].(map[string]interface{})
-	if !ok {
-		return 0, fmt.Errorf("OnDemand terms not found")
-	}
-
-	for _, v := range onDemand {
-		termData, ok := v.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		priceDimensions, ok := termData["priceDimensions"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		for _, pd := range priceDimensions {
-			dimensionData, ok := pd.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			pricePerUnit, ok := dimensionData["pricePerUnit"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			// Check unit field (convert from seconds to hours if needed)
-			unit, _ := dimensionData["unit"].(string)
-
-			if usdPrice, ok := pricePerUnit["USD"].(string); ok {
-				price, err := strconv.ParseFloat(usdPrice, 64)
-				if err != nil {
-					continue
-				}
-
-				// Convert from seconds to hours if unit is in seconds (seconds × 3600 = hours)
-				if strings.Contains(strings.ToLower(unit), "second") || strings.Contains(strings.ToLower(unit), "sec") {
-					price = price * 3600.0
-				}
-
-				return price, nil // Return price per hour
-			}
-		}
-	}
-
-	return 0, fmt.Errorf("price not found in pricing data")
+	return extractOnDemandPriceFromResult(result.PriceList[0])
 }
 
 // getComputeSavingsPlanPrice retrieves EC2 Savings Plan pricing using the Savings Plans API
-func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error) {
+func (c *EC2Command) getComputeSavingsPlanPrice(ctx context.Context, cfg aws.Config) (float64, error) {
 	svc := savingsplans.NewFromConfig(cfg)
 
 	// Get payment option from arguments
@@ -246,7 +187,7 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 		MaxResults: 100,
 	}
 
-	result, err := svc.DescribeSavingsPlansOfferingRates(context.TODO(), input)
+	result, err := svc.DescribeSavingsPlansOfferingRates(ctx, input)
 	if err != nil {
 		return 0, fmt.Errorf("failed to describe savings plans offering rates: %v", err)
 	}
@@ -278,7 +219,7 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 		}
 
 		// Check if region matches
-		regionCode := c.getRegionCodeFromLocation(offering.Properties)
+		regionCode := getRegionCodeFromLocation(offering.Properties)
 		if regionCode != "" && regionCode != c.opts.Region {
 			continue
 		}
@@ -298,15 +239,20 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 		}
 
 		// Also check from Properties
+		isWindows := false
 		for _, prop := range offering.Properties {
 			if prop.Name != nil && prop.Value != nil {
 				if *prop.Name == "usagetype" {
 					usageType := strings.ToLower(*prop.Value)
 					if strings.Contains(usageType, "windows") {
-						continue
+						isWindows = true
+						break
 					}
 				}
 			}
+		}
+		if isWindows {
+			continue
 		}
 
 		// Get Rate
@@ -327,20 +273,6 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 	return matchedRate, nil
 }
 
-// getRegionCodeFromLocation retrieves region code from Properties
-func (c *EC2Command) getRegionCodeFromLocation(properties []savingsplansTypes.SavingsPlanOfferingRateProperty) string {
-	for _, prop := range properties {
-		if prop.Name != nil && *prop.Name == "regionCode" && prop.Value != nil {
-			return *prop.Value
-		}
-		if prop.Name != nil && *prop.Name == "location" && prop.Value != nil {
-			// Reverse lookup region code from location
-			return c.mapLocationToRegion(*prop.Value)
-		}
-	}
-	return ""
-}
-
 // getInstanceTypeFromProperties retrieves instance type from Properties
 func (c *EC2Command) getInstanceTypeFromProperties(properties []savingsplansTypes.SavingsPlanOfferingRateProperty) string {
 	for _, prop := range properties {
@@ -349,57 +281,4 @@ func (c *EC2Command) getInstanceTypeFromProperties(properties []savingsplansType
 		}
 	}
 	return ""
-}
-
-// mapLocationToRegion retrieves region code from location name
-func (c *EC2Command) mapLocationToRegion(location string) string {
-	locationMap := map[string]string{
-		"Asia Pacific (Tokyo)":     "ap-northeast-1",
-		"US East (N. Virginia)":    "us-east-1",
-		"US West (Oregon)":         "us-west-2",
-		"EU (Ireland)":             "eu-west-1",
-		"Asia Pacific (Singapore)": "ap-southeast-1",
-		"Asia Pacific (Sydney)":    "ap-southeast-2",
-		"EU (Frankfurt)":           "eu-central-1",
-	}
-	if region, ok := locationMap[location]; ok {
-		return region
-	}
-	return ""
-}
-
-func (c *EC2Command) mapRegionToLocation(region string) string {
-	// Map region name to Pricing API location format
-	locationMap := map[string]string{
-		"ap-northeast-1": "Asia Pacific (Tokyo)",
-		"us-east-1":      "US East (N. Virginia)",
-		"us-west-2":      "US West (Oregon)",
-		"eu-west-1":      "EU (Ireland)",
-		"ap-southeast-1": "Asia Pacific (Singapore)",
-		"ap-southeast-2": "Asia Pacific (Sydney)",
-		"eu-central-1":   "EU (Frankfurt)",
-	}
-	if location, ok := locationMap[region]; ok {
-		return location
-	}
-	// Default: use region name as is
-	return region
-}
-
-func (c *EC2Command) renderCSV(hourlyCommitment, spPurchaseAmount, currentCost, spCost, savingsAmount, savingsRate float64, noHeader bool) {
-	// Output CSV header (only if noHeader is false)
-	if !noHeader {
-		fmt.Println("Hourly commitment,SP/RI Purchase Amount (USD),Current Cost (USD/month),Cost After Purchase (USD/month),Savings Amount,Savings Rate")
-	}
-
-	// Output data row
-	// hourly commitment doesn't need rounding, others don't need decimal places
-	fmt.Printf("%g,%.0f,%.0f,%.0f,%.0f,%.0f\n",
-		hourlyCommitment,
-		spPurchaseAmount,
-		currentCost,
-		spCost,
-		savingsAmount,
-		savingsRate,
-	)
 }
