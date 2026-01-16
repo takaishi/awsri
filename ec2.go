@@ -56,31 +56,31 @@ func (c *EC2Command) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to get Savings Plan price: %v", err)
 	}
 
-	// 1時間あたりのコストを計算
-	// Hourly commitment = インスタンス数 × 1時間あたりのSP料金
+	// Calculate hourly cost
+	// Hourly commitment = number of instances × hourly SP price
 	hourlyCommitment := float64(c.opts.Count) * spPrice
 
-	// 購入するSP/RI (USD) = Hourly commitment × 720時間 × 12ヶ月 × 期間（年）
+	// SP/RI purchase amount (USD) = Hourly commitment × 720 hours × 12 months × duration (years)
 	hoursPerMonth := 720.0
 	spPurchaseAmount := hourlyCommitment * hoursPerMonth * 12.0 * float64(c.opts.Duration)
 
-	// 現在のコスト（オンデマンド）
+	// Current cost (on-demand)
 	currentCostPerMonth := float64(c.opts.Count) * onDemandPrice * hoursPerMonth
 
-	// 購入後のコスト（Savings Plan）
+	// Cost after purchase (Savings Plan)
 	spCostPerMonth := float64(c.opts.Count) * spPrice * hoursPerMonth
 
-	// 削減コストと削減率
+	// Calculate savings amount and savings rate
 	savingsAmount := currentCostPerMonth - spCostPerMonth
 	savingsRate := (savingsAmount / currentCostPerMonth) * 100.0
 
-	// CSV出力
+	// Output CSV
 	c.renderCSV(hourlyCommitment, spPurchaseAmount, currentCostPerMonth, spCostPerMonth, savingsAmount, savingsRate, c.opts.NoHeader)
 
 	return nil
 }
 
-// getEC2OnDemandPrice はPricing APIを使用してEC2のオンデマンド料金を取得します
+// getEC2OnDemandPrice retrieves EC2 on-demand pricing using the Pricing API
 func (c *EC2Command) getEC2OnDemandPrice(cfg aws.Config) (float64, error) {
 	svc := pricing.NewFromConfig(cfg)
 	location := c.mapRegionToLocation(c.opts.Region)
@@ -128,11 +128,11 @@ func (c *EC2Command) getEC2OnDemandPrice(cfg aws.Config) (float64, error) {
 		return 0, fmt.Errorf("no pricing information found for instance type %s in location %s", c.opts.InstanceType, location)
 	}
 
-	// 最初の結果から料金を抽出
+	// Extract pricing from the first result
 	return c.extractEC2OnDemandPriceFromResult(result.PriceList[0])
 }
 
-// extractEC2OnDemandPriceFromResult はPricing APIのレスポンスからEC2のオンデマンド料金を抽出します
+// extractEC2OnDemandPriceFromResult extracts EC2 on-demand pricing from Pricing API response
 func (c *EC2Command) extractEC2OnDemandPriceFromResult(priceListEntry string) (float64, error) {
 	var priceData map[string]interface{}
 	err := json.Unmarshal([]byte(priceListEntry), &priceData)
@@ -173,7 +173,7 @@ func (c *EC2Command) extractEC2OnDemandPriceFromResult(priceListEntry string) (f
 				continue
 			}
 
-			// unitフィールドを確認（秒単位の場合は時間単位に変換）
+			// Check unit field (convert from seconds to hours if needed)
 			unit, _ := dimensionData["unit"].(string)
 
 			if usdPrice, ok := pricePerUnit["USD"].(string); ok {
@@ -182,12 +182,12 @@ func (c *EC2Command) extractEC2OnDemandPriceFromResult(priceListEntry string) (f
 					continue
 				}
 
-				// 単位が秒の場合は時間単位に変換（秒 × 3600 = 時間）
+				// Convert from seconds to hours if unit is in seconds (seconds × 3600 = hours)
 				if strings.Contains(strings.ToLower(unit), "second") || strings.Contains(strings.ToLower(unit), "sec") {
 					price = price * 3600.0
 				}
 
-				return price, nil // 1時間あたりの料金を返す
+				return price, nil // Return price per hour
 			}
 		}
 	}
@@ -195,17 +195,17 @@ func (c *EC2Command) extractEC2OnDemandPriceFromResult(priceListEntry string) (f
 	return 0, fmt.Errorf("price not found in pricing data")
 }
 
-// getComputeSavingsPlanPrice はSavings Plans APIを使用してEC2のSavings Plan料金を取得します
+// getComputeSavingsPlanPrice retrieves EC2 Savings Plan pricing using the Savings Plans API
 func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error) {
 	svc := savingsplans.NewFromConfig(cfg)
 
-	// 支払いオプションを引数から取得
+	// Get payment option from arguments
 	paymentOptionStr := c.opts.PaymentOption
 	if paymentOptionStr == "" {
 		paymentOptionStr = "no-upfront"
 	}
 
-	// 小文字・ハイフンつなぎの値をAWS APIが期待する形式に変換
+	// Convert lowercase hyphenated value to the format expected by AWS API
 	awsPaymentOption, err := convertPaymentOptionToAWSFormat(paymentOptionStr)
 	if err != nil {
 		return 0, err
@@ -213,8 +213,8 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 
 	paymentOption := savingsplansTypes.SavingsPlanPaymentOption(awsPaymentOption)
 
-	// Savings Plans Offering Ratesを取得
-	durationSeconds := int64(c.opts.Duration * 365 * 24 * 60 * 60) // 年数を秒に変換
+	// Get Savings Plans Offering Rates
+	durationSeconds := int64(c.opts.Duration * 365 * 24 * 60 * 60) // Convert years to seconds
 
 	input := &savingsplans.DescribeSavingsPlansOfferingRatesInput{
 		SavingsPlanTypes: []savingsplansTypes.SavingsPlanType{
@@ -252,7 +252,7 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 	}
 
 	if len(result.SearchResults) == 0 {
-		// 指定された支払いオプションで見つからない場合、他のオプションを試す
+		// If not found with the specified payment option, try other options
 		if paymentOptionStr == "no-upfront" {
 			input.SavingsPlanPaymentOptions = []savingsplansTypes.SavingsPlanPaymentOption{
 				savingsplansTypes.SavingsPlanPaymentOptionAllUpfront,
@@ -267,29 +267,29 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 		}
 	}
 
-	// 期間とインスタンスタイプに一致するオファーを探す
+	// Find offers that match duration and instance type
 	var matchedRate float64
 	found := false
 
 	for _, offering := range result.SearchResults {
-		// 期間が一致するか確認
+		// Check if duration matches
 		if offering.SavingsPlanOffering != nil && offering.SavingsPlanOffering.DurationSeconds != durationSeconds {
 			continue
 		}
 
-		// リージョンが一致するか確認
+		// Check if region matches
 		regionCode := c.getRegionCodeFromLocation(offering.Properties)
 		if regionCode != "" && regionCode != c.opts.Region {
 			continue
 		}
 
-		// インスタンスタイプが一致するか確認
+		// Check if instance type matches
 		instanceType := c.getInstanceTypeFromProperties(offering.Properties)
 		if instanceType != "" && instanceType != c.opts.InstanceType {
 			continue
 		}
 
-		// Linuxを確認（Windowsを除外）
+		// Check for Linux (exclude Windows)
 		if offering.UsageType != nil {
 			usageType := strings.ToLower(*offering.UsageType)
 			if strings.Contains(usageType, "windows") {
@@ -297,7 +297,7 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 			}
 		}
 
-		// Propertiesからも確認
+		// Also check from Properties
 		for _, prop := range offering.Properties {
 			if prop.Name != nil && prop.Value != nil {
 				if *prop.Name == "usagetype" {
@@ -309,7 +309,7 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 			}
 		}
 
-		// Rateを取得
+		// Get Rate
 		if offering.Rate != nil {
 			rate, err := strconv.ParseFloat(*offering.Rate, 64)
 			if err == nil {
@@ -327,21 +327,21 @@ func (c *EC2Command) getComputeSavingsPlanPrice(cfg aws.Config) (float64, error)
 	return matchedRate, nil
 }
 
-// getRegionCodeFromLocation はPropertiesからリージョンコードを取得します
+// getRegionCodeFromLocation retrieves region code from Properties
 func (c *EC2Command) getRegionCodeFromLocation(properties []savingsplansTypes.SavingsPlanOfferingRateProperty) string {
 	for _, prop := range properties {
 		if prop.Name != nil && *prop.Name == "regionCode" && prop.Value != nil {
 			return *prop.Value
 		}
 		if prop.Name != nil && *prop.Name == "location" && prop.Value != nil {
-			// locationからリージョンコードを逆引き
+			// Reverse lookup region code from location
 			return c.mapLocationToRegion(*prop.Value)
 		}
 	}
 	return ""
 }
 
-// getInstanceTypeFromProperties はPropertiesからインスタンスタイプを取得します
+// getInstanceTypeFromProperties retrieves instance type from Properties
 func (c *EC2Command) getInstanceTypeFromProperties(properties []savingsplansTypes.SavingsPlanOfferingRateProperty) string {
 	for _, prop := range properties {
 		if prop.Name != nil && *prop.Name == "instanceType" && prop.Value != nil {
@@ -351,7 +351,7 @@ func (c *EC2Command) getInstanceTypeFromProperties(properties []savingsplansType
 	return ""
 }
 
-// mapLocationToRegion はlocation名からリージョンコードを取得します
+// mapLocationToRegion retrieves region code from location name
 func (c *EC2Command) mapLocationToRegion(location string) string {
 	locationMap := map[string]string{
 		"Asia Pacific (Tokyo)":     "ap-northeast-1",
@@ -369,7 +369,7 @@ func (c *EC2Command) mapLocationToRegion(location string) string {
 }
 
 func (c *EC2Command) mapRegionToLocation(region string) string {
-	// リージョン名をPricing APIのlocation形式にマッピング
+	// Map region name to Pricing API location format
 	locationMap := map[string]string{
 		"ap-northeast-1": "Asia Pacific (Tokyo)",
 		"us-east-1":      "US East (N. Virginia)",
@@ -382,18 +382,18 @@ func (c *EC2Command) mapRegionToLocation(region string) string {
 	if location, ok := locationMap[region]; ok {
 		return location
 	}
-	// デフォルトはリージョン名をそのまま使用
+	// Default: use region name as is
 	return region
 }
 
 func (c *EC2Command) renderCSV(hourlyCommitment, spPurchaseAmount, currentCost, spCost, savingsAmount, savingsRate float64, noHeader bool) {
-	// CSVヘッダーを出力（noHeaderがfalseの場合のみ）
+	// Output CSV header (only if noHeader is false)
 	if !noHeader {
 		fmt.Println("Hourly commitment,購入するSP/RI (USD),現在のコスト(USD/月),購入後のコスト(USD/月),削減コスト,削減率")
 	}
 
-	// データ行を出力
-	// hourly commitmentは四捨五入不要、それ以外は小数点以下不要
+	// Output data row
+	// hourly commitment doesn't need rounding, others don't need decimal places
 	fmt.Printf("%g,%.0f,%.0f,%.0f,%.0f,%.0f\n",
 		hourlyCommitment,
 		spPurchaseAmount,

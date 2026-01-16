@@ -48,26 +48,26 @@ func (c *FargateCommand) Run(ctx context.Context) error {
 		return fmt.Errorf("unable to load SDK config: %v", err)
 	}
 
-	// オンデマンド料金を取得
+	// Get on-demand pricing
 	onDemandPricing, err := c.getFargateOnDemandPrice(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to get on-demand price: %v", err)
 	}
 
-	// Savings Plan料金を取得
+	// Get Savings Plan pricing
 	spPricing, err := c.getComputeSavingsPlanPrice(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to get Savings Plan price: %v", err)
 	}
 
-	// 入力パラメータの単位を変換
-	// vCPU: millicores単位の可能性があるため、1024で割ってvCPU数に変換
-	// Memory: MB単位の可能性があるため、1024で割ってGBに変換
+	// Convert input parameter units
+	// vCPU: may be in millicores, so divide by 1024 to convert to vCPU count
+	// Memory: may be in MB, so divide by 1024 to convert to GB
 	vcpuCount := c.opts.VCPUPerHour / 1024.0
 	memoryGB := c.opts.MemoryGBPerHour / 1024.0
 
-	// 月間コスト計算（720時間/月）
-	// TaskCount × vCPU数 × 720時間 × vCPU単価 + TaskCount × GB数 × 720時間 × GB単価
+	// Calculate monthly cost (720 hours/month)
+	// TaskCount × vCPU count × 720 hours × vCPU price + TaskCount × GB count × 720 hours × GB price
 	hoursPerMonth := 720.0
 	currentCostPerMonth := float64(c.opts.TaskCount)*vcpuCount*hoursPerMonth*onDemandPricing.VCPUOnDemandPrice +
 		float64(c.opts.TaskCount)*memoryGB*hoursPerMonth*onDemandPricing.MemoryOnDemandPrice
@@ -75,43 +75,43 @@ func (c *FargateCommand) Run(ctx context.Context) error {
 	spCostPerMonth := float64(c.opts.TaskCount)*vcpuCount*hoursPerMonth*spPricing.VCPUSPPrice +
 		float64(c.opts.TaskCount)*memoryGB*hoursPerMonth*spPricing.MemorySPPrice
 
-	// 1時間あたりのコストを計算（Hourly commitment用）
+	// Calculate hourly cost (for Hourly commitment)
 	hourlySPCost := spCostPerMonth / hoursPerMonth
 
-	// Hourly commitment = Savings Plan適用後の1時間あたりのコスト
+	// Hourly commitment = hourly cost after applying Savings Plan
 	hourlyCommitment := hourlySPCost
 
-	// 購入するSP/RI (USD) = Hourly commitment × 720時間 × 12ヶ月 × 期間（年）
+	// SP/RI purchase amount (USD) = Hourly commitment × 720 hours × 12 months × duration (years)
 	spPurchaseAmount := hourlyCommitment * hoursPerMonth * 12.0 * float64(c.opts.Duration)
 
-	// 削減コストと削減率
+	// Calculate savings amount and savings rate
 	savingsAmount := currentCostPerMonth - spCostPerMonth
 	savingsRate := (savingsAmount / currentCostPerMonth) * 100.0
 
-	// CSV出力
+	// Output CSV
 	c.renderCSV(hourlyCommitment, spPurchaseAmount, currentCostPerMonth, spCostPerMonth, savingsAmount, savingsRate, c.opts.NoHeader)
 
 	return nil
 }
 
-// getFargateOnDemandPrice はPricing APIを使用してFargateのオンデマンド料金を取得します
+// getFargateOnDemandPrice retrieves Fargate on-demand pricing using the Pricing API
 func (c *FargateCommand) getFargateOnDemandPrice(cfg aws.Config) (*FargatePricing, error) {
 	svc := pricing.NewFromConfig(cfg)
 	location := c.mapRegionToLocation(c.opts.Region)
 
-	// アーキテクチャに応じたフィルタを追加
+	// Add architecture-based filter
 	processorArchitecture := "x86_64"
 	if c.opts.Architecture == "arm" {
 		processorArchitecture = "ARM"
 	}
 
-	// vCPU料金を取得（cputype=perCPUフィルタとアーキテクチャフィルタを使用）
+	// Get vCPU pricing (using cputype=perCPU filter and architecture filter)
 	vcpuPrice, err := c.getFargateOnDemandPriceByType(svc, location, "cputype", "perCPU", processorArchitecture)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vCPU price: %v", err)
 	}
 
-	// メモリ料金を取得（memorytype=perGBフィルタとアーキテクチャフィルタを使用）
+	// Get memory pricing (using memorytype=perGB filter and architecture filter)
 	memoryPrice, err := c.getFargateOnDemandPriceByType(svc, location, "memorytype", "perGB", processorArchitecture)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get memory price: %v", err)
@@ -123,9 +123,9 @@ func (c *FargateCommand) getFargateOnDemandPrice(cfg aws.Config) (*FargatePricin
 	}, nil
 }
 
-// getFargateOnDemandPriceByType は指定されたフィルタタイプでFargateのオンデマンド料金を取得します
+// getFargateOnDemandPriceByType retrieves Fargate on-demand pricing with the specified filter type
 func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, location, filterType, filterValue, processorArchitecture string) (float64, error) {
-	// まず、アーキテクチャフィルタなしで検索
+	// First, search without architecture filter
 	filters := []types.Filter{
 		{
 			Field: aws.String("location"),
@@ -154,9 +154,9 @@ func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, loca
 		return 0, fmt.Errorf("no pricing information found for %s=%s in location %s", filterType, filterValue, location)
 	}
 
-	// アーキテクチャでフィルタリング
-	// Pricing APIのレスポンスでは、processorArchitecture属性が空の場合があるため、
-	// usagetypeにアーキテクチャ情報が含まれている（例: APN1-Fargate-ARM-vCPU-Hours:perCPU）
+	// Filter by architecture
+	// In Pricing API responses, the processorArchitecture attribute may be empty,
+	// so architecture information is included in usagetype (e.g., APN1-Fargate-ARM-vCPU-Hours:perCPU)
 	var matchedPrice string
 
 	for _, priceListEntry := range result.PriceList {
@@ -175,7 +175,7 @@ func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, loca
 			continue
 		}
 
-		// 複数の属性名でアーキテクチャを確認
+		// Check architecture using multiple attribute names
 		arch := ""
 		if val, ok := attributes["processorArchitecture"].(string); ok {
 			arch = val
@@ -187,14 +187,14 @@ func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, loca
 
 		usagetype, _ := attributes["usagetype"].(string)
 
-		// ARMの場合は、usagetypeに"ARM"が含まれているかも確認
+		// For ARM, also check if usagetype contains "ARM"
 		if processorArchitecture == "ARM" {
 			if strings.Contains(strings.ToUpper(usagetype), "ARM") || arch == "ARM" {
 				matchedPrice = priceListEntry
 				break
 			}
 		} else if arch == processorArchitecture {
-			// x86_64の場合は、ARMを含まないusagetypeを探す
+			// For x86_64, look for usagetype that does not contain ARM
 			if !strings.Contains(strings.ToUpper(usagetype), "ARM") {
 				matchedPrice = priceListEntry
 				break
@@ -206,7 +206,7 @@ func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, loca
 		return c.extractOnDemandPriceFromResult(matchedPrice)
 	}
 
-	// アーキテクチャが一致しない場合、最初の結果を使用（フォールバック）
+	// If architecture doesn't match, use the first result (fallback)
 	if len(result.PriceList) > 0 {
 		return c.extractOnDemandPriceFromResult(result.PriceList[0])
 	}
@@ -214,7 +214,7 @@ func (c *FargateCommand) getFargateOnDemandPriceByType(svc *pricing.Client, loca
 	return 0, fmt.Errorf("no pricing information found")
 }
 
-// extractOnDemandPriceFromResult はPricing APIのレスポンスからオンデマンド料金を抽出します
+// extractOnDemandPriceFromResult extracts on-demand pricing from Pricing API response
 func (c *FargateCommand) extractOnDemandPriceFromResult(priceListEntry string) (float64, error) {
 	var priceData map[string]interface{}
 	err := json.Unmarshal([]byte(priceListEntry), &priceData)
@@ -255,21 +255,21 @@ func (c *FargateCommand) extractOnDemandPriceFromResult(priceListEntry string) (
 				continue
 			}
 
-			// unitフィールドを確認（秒単位の場合は時間単位に変換）
-			unit, _ := dimensionData["unit"].(string)
+		// Check unit field (convert from seconds to hours if needed)
+		unit, _ := dimensionData["unit"].(string)
 
-			if usdPrice, ok := pricePerUnit["USD"].(string); ok {
-				price, err := strconv.ParseFloat(usdPrice, 64)
-				if err != nil {
-					continue
-				}
+		if usdPrice, ok := pricePerUnit["USD"].(string); ok {
+			price, err := strconv.ParseFloat(usdPrice, 64)
+			if err != nil {
+				continue
+			}
 
-				// 単位が秒の場合は時間単位に変換（秒 × 3600 = 時間）
-				if strings.Contains(strings.ToLower(unit), "second") || strings.Contains(strings.ToLower(unit), "sec") {
-					price = price * 3600.0
-				}
+			// Convert from seconds to hours if unit is in seconds (seconds × 3600 = hours)
+			if strings.Contains(strings.ToLower(unit), "second") || strings.Contains(strings.ToLower(unit), "sec") {
+				price = price * 3600.0
+			}
 
-				return price, nil // 1時間あたりの料金を返す
+			return price, nil // Return price per hour
 			}
 		}
 	}
@@ -277,7 +277,7 @@ func (c *FargateCommand) extractOnDemandPriceFromResult(priceListEntry string) (
 	return 0, fmt.Errorf("price not found in pricing data")
 }
 
-// convertPaymentOptionToAWSFormat は小文字・ハイフンつなぎのpayment optionをAWS APIが期待する形式に変換します
+// convertPaymentOptionToAWSFormat converts lowercase hyphenated payment option to the format expected by AWS API
 func convertPaymentOptionToAWSFormat(option string) (string, error) {
 	optionMap := map[string]string{
 		"no-upfront":      "No Upfront",
@@ -292,18 +292,18 @@ func convertPaymentOptionToAWSFormat(option string) (string, error) {
 	return "", fmt.Errorf("invalid payment option: %s (must be one of: no-upfront, partial-upfront, all-upfront)", option)
 }
 
-// getComputeSavingsPlanPrice はSavings Plans APIを使用してFargateのSavings Plan料金を取得します
+// getComputeSavingsPlanPrice retrieves Fargate Savings Plan pricing using the Savings Plans API
 func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePricing, error) {
 	svc := savingsplans.NewFromConfig(cfg)
 
-	// 支払いオプションを引数から取得
+	// Get payment option from arguments
 	paymentOptionStr := c.opts.PaymentOption
-	// デフォルト値の設定
+	// Set default value
 	if paymentOptionStr == "" {
 		paymentOptionStr = "no-upfront"
 	}
 
-	// 小文字・ハイフンつなぎの値をAWS APIが期待する形式に変換
+	// Convert lowercase hyphenated value to the format expected by AWS API
 	awsPaymentOption, err := convertPaymentOptionToAWSFormat(paymentOptionStr)
 	if err != nil {
 		return nil, err
@@ -311,8 +311,8 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 
 	paymentOption := savingsplansTypes.SavingsPlanPaymentOption(awsPaymentOption)
 
-	// Savings Plans Offering Ratesを取得
-	// リージョンフィルタを追加
+	// Get Savings Plans Offering Rates
+	// Add region filter
 	input := &savingsplans.DescribeSavingsPlansOfferingRatesInput{
 		SavingsPlanTypes: []savingsplansTypes.SavingsPlanType{
 			savingsplansTypes.SavingsPlanTypeCompute,
@@ -343,8 +343,8 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 	}
 
 	if len(result.SearchResults) == 0 {
-		// 指定された支払いオプションで見つからない場合、他のオプションを試す
-		// no-upfrontで見つからない場合、all-upfrontを試す
+		// If not found with the specified payment option, try other options
+		// If not found with no-upfront, try all-upfront
 		if paymentOptionStr == "no-upfront" {
 			input.SavingsPlanPaymentOptions = []savingsplansTypes.SavingsPlanPaymentOption{
 				savingsplansTypes.SavingsPlanPaymentOptionAllUpfront,
@@ -359,10 +359,10 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 		}
 	}
 
-	// 期間に応じたオファーをフィルタリング
-	durationSeconds := int64(c.opts.Duration * 365 * 24 * 60 * 60) // 年数を秒に変換
+	// Filter offers by duration
+	durationSeconds := int64(c.opts.Duration * 365 * 24 * 60 * 60) // Convert years to seconds
 
-	// アーキテクチャに応じたフィルタリング条件
+	// Filtering conditions based on architecture
 	isARM := c.opts.Architecture == "arm"
 
 	var vcpuPrice, memoryPrice float64
@@ -370,34 +370,34 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 	foundMemory := false
 
 	for _, offering := range result.SearchResults {
-		// 期間が一致するか確認
+		// Check if duration matches
 		if offering.SavingsPlanOffering != nil && offering.SavingsPlanOffering.DurationSeconds != durationSeconds {
 			continue
 		}
 
-		// リージョンが一致するか確認
+		// Check if region matches
 		regionCode := c.getRegionCodeFromLocation(offering.Properties)
 		if regionCode != "" && regionCode != c.opts.Region {
 			continue
 		}
 
-		// UsageTypeとRateを確認
-		// まず、offering.UsageTypeを確認
+		// Check UsageType and Rate
+		// First, check offering.UsageType
 		if offering.UsageType != nil {
 			usageType := strings.ToLower(*offering.UsageType)
 
-			// Windowsを除外
+			// Exclude Windows
 			if strings.Contains(usageType, "windows") {
 				continue
 			}
 
-			// アーキテクチャの一致を確認
+			// Check architecture match
 			hasARM := strings.Contains(usageType, "arm")
 			if isARM && !hasARM {
-				continue // ARMを指定しているが、ARMを含まないUsageTypeはスキップ
+				continue // Skip UsageType that doesn't contain ARM when ARM is specified
 			}
 			if !isARM && hasARM {
-				continue // Linux x86_64を指定しているが、ARMを含むUsageTypeはスキップ
+				continue // Skip UsageType that contains ARM when Linux x86_64 is specified
 			}
 
 			// vCPUまたはMemoryのUsageTypeを判定
@@ -420,25 +420,25 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 			}
 		}
 
-		// PropertiesからもUsageTypeを確認
+		// Also check UsageType from Properties
 		for _, prop := range offering.Properties {
 			if prop.Name != nil && prop.Value != nil {
-				// UsageTypeを確認
+				// Check UsageType
 				if *prop.Name == "usagetype" {
 					usageType := strings.ToLower(*prop.Value)
 
-					// Windowsを除外
+					// Exclude Windows
 					if strings.Contains(usageType, "windows") {
 						continue
 					}
 
-					// アーキテクチャの一致を確認
+					// Check architecture match
 					hasARM := strings.Contains(usageType, "arm")
 					if isARM && !hasARM {
-						continue // ARMを指定しているが、ARMを含まないUsageTypeはスキップ
+						continue // Skip UsageType that doesn't contain ARM when ARM is specified
 					}
 					if !isARM && hasARM {
-						continue // Linux x86_64を指定しているが、ARMを含むUsageTypeはスキップ
+						continue // Skip UsageType that contains ARM when Linux x86_64 is specified
 					}
 
 					// vCPUまたはMemoryのUsageTypeを判定
@@ -463,15 +463,15 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 			}
 		}
 
-		// unitフィールドも確認
+		// Also check unit field
 		unit := strings.ToLower(string(offering.Unit))
 		if strings.Contains(unit, "hour") || strings.Contains(unit, "hr") {
-			// これは時間単位の料金
+			// This is hourly pricing
 			if offering.Rate != nil {
 				rate, err := strconv.ParseFloat(*offering.Rate, 64)
 				if err == nil {
-					// UsageTypeで判定できない場合、unitとrateから推測
-					// 通常、vCPUの方がメモリより高い
+					// If cannot determine from UsageType, infer from unit and rate
+					// Usually vCPU is higher than memory
 					if !foundVCPU && rate > 0.01 {
 						vcpuPrice = rate
 						foundVCPU = true
@@ -484,7 +484,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 		}
 	}
 
-	// 見つからない場合、すべての結果を検索して最初のvCPUとMemoryを見つける
+	// If not found, search all results to find the first vCPU and Memory
 	if !foundVCPU || !foundMemory {
 		for _, offering := range result.SearchResults {
 			if offering.SavingsPlanOffering != nil && offering.SavingsPlanOffering.DurationSeconds != durationSeconds {
@@ -502,7 +502,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 					continue
 				}
 
-				// UsageTypeで判定
+				// Determine from UsageType
 				if offering.UsageType != nil {
 					usageType := strings.ToLower(*offering.UsageType)
 					if (strings.Contains(usageType, "vcpu") || strings.Contains(usageType, "cpu")) && !foundVCPU {
@@ -514,7 +514,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 					}
 				}
 
-				// PropertiesからもUsageTypeを確認
+				// Also check UsageType from Properties
 				for _, prop := range offering.Properties {
 					if prop.Name != nil && prop.Value != nil {
 						if *prop.Name == "usagetype" {
@@ -530,7 +530,7 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 					}
 				}
 
-				// どちらも見つからない場合、rateの値で推測
+				// If neither found, infer from rate value
 				if !foundVCPU && !foundMemory {
 					if rate > 0.01 {
 						vcpuPrice = rate
@@ -557,21 +557,21 @@ func (c *FargateCommand) getComputeSavingsPlanPrice(cfg aws.Config) (*FargatePri
 	}, nil
 }
 
-// getRegionCodeFromLocation はPropertiesからリージョンコードを取得します
+// getRegionCodeFromLocation retrieves region code from Properties
 func (c *FargateCommand) getRegionCodeFromLocation(properties []savingsplansTypes.SavingsPlanOfferingRateProperty) string {
 	for _, prop := range properties {
 		if prop.Name != nil && *prop.Name == "regionCode" && prop.Value != nil {
 			return *prop.Value
 		}
 		if prop.Name != nil && *prop.Name == "location" && prop.Value != nil {
-			// locationからリージョンコードを逆引き
+			// Reverse lookup region code from location
 			return c.mapLocationToRegion(*prop.Value)
 		}
 	}
 	return ""
 }
 
-// mapLocationToRegion はlocation名からリージョンコードを取得します
+// mapLocationToRegion retrieves region code from location name
 func (c *FargateCommand) mapLocationToRegion(location string) string {
 	locationMap := map[string]string{
 		"Asia Pacific (Tokyo)":     "ap-northeast-1",
@@ -589,7 +589,7 @@ func (c *FargateCommand) mapLocationToRegion(location string) string {
 }
 
 func (c *FargateCommand) mapRegionToLocation(region string) string {
-	// リージョン名をPricing APIのlocation形式にマッピング
+	// Map region name to Pricing API location format
 	locationMap := map[string]string{
 		"ap-northeast-1": "Asia Pacific (Tokyo)",
 		"us-east-1":      "US East (N. Virginia)",
@@ -602,18 +602,18 @@ func (c *FargateCommand) mapRegionToLocation(region string) string {
 	if location, ok := locationMap[region]; ok {
 		return location
 	}
-	// デフォルトはリージョン名をそのまま使用
+	// Default: use region name as is
 	return region
 }
 
 func (c *FargateCommand) renderCSV(hourlyCommitment, spPurchaseAmount, currentCost, spCost, savingsAmount, savingsRate float64, noHeader bool) {
-	// CSVヘッダーを出力（noHeaderがfalseの場合のみ）
+	// Output CSV header (only if noHeader is false)
 	if !noHeader {
 		fmt.Println("Hourly commitment,購入するSP/RI (USD),現在のコスト(USD/月),購入後のコスト(USD/月),削減コスト,削減率")
 	}
 
-	// データ行を出力
-	// hourly commitmentは四捨五入不要、それ以外は小数点以下不要
+	// Output data row
+	// hourly commitment doesn't need rounding, others don't need decimal places
 	fmt.Printf("%g,%.0f,%.0f,%.0f,%.0f,%.0f\n",
 		hourlyCommitment,
 		spPurchaseAmount,
