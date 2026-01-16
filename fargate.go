@@ -16,14 +16,14 @@ import (
 )
 
 type FargateOption struct {
-	Region          string  `name:"region" default:"ap-northeast-1" help:"AWS region"`
-	MemoryMBPerHour float64 `required:"" help:"Memory MB per hour (will be converted to GB)"`
+	Region                string  `name:"region" default:"ap-northeast-1" help:"AWS region"`
+	MemoryMBPerHour       float64 `required:"" help:"Memory MB per hour (will be converted to GB)"`
 	VCPUMillicoresPerHour float64 `required:"" help:"vCPU millicores per hour (will be converted to vCPU)"`
-	TaskCount       int     `required:"" help:"Number of tasks"`
-	Duration        int     `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
-	Architecture    string  `name:"architecture" default:"x86_64" help:"Architecture (x86_64 or arm)"`
-	PaymentOption   string  `name:"payment-option" default:"no-upfront" help:"Payment option (no-upfront, partial-upfront, all-upfront)"`
-	NoHeader        bool    `name:"no-header" help:"Do not output CSV header"`
+	TaskCount             int     `required:"" help:"Number of tasks"`
+	Duration              int     `name:"duration" default:"1" help:"Duration in years (1 or 3)"`
+	Architecture          string  `name:"architecture" default:"x86_64" help:"Architecture (x86_64 or arm)"`
+	PaymentOption         string  `name:"payment-option" default:"no-upfront" help:"Payment option (no-upfront, partial-upfront, all-upfront)"`
+	NoHeader              bool    `name:"no-header" help:"Do not output CSV header"`
 }
 
 type FargateCommand struct {
