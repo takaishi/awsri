@@ -2,7 +2,7 @@ module github.com/takaishi/awsri
 
 go 1.23
 
-toolchain go1.23.5
+toolchain go1.25.7
 
 require (
 	github.com/alecthomas/kong v1.8.1
@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/elasticache v1.34.7
 	github.com/aws/aws-sdk-go-v2/service/pricing v1.32.17
 	github.com/aws/aws-sdk-go-v2/service/rds v1.68.0
+	github.com/aws/aws-sdk-go-v2/service/savingsplans v1.31.1
 	github.com/olekukonko/tablewriter v0.0.5
 )
 
@@ -22,7 +23,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.7.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.10.4 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.10.10 // indirect
-	github.com/aws/aws-sdk-go-v2/service/savingsplans v1.31.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.18.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.21.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.26.7 // indirect
